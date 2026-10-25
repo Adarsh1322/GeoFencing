@@ -1,81 +1,21 @@
 /**
  * CampusSafe SQLite Database Layer
- * Provides unified interface across React Native (@op-engineering/op-sqlite)
- * and Jest / Node testing environments (better-sqlite3).
+ * Mobile runtime uses @op-engineering/op-sqlite exclusively.
+ * Test environments inject custom/in-memory drivers (e.g. BetterSqliteAdapter from test helpers).
  */
 
 const { runMigrations } = require('./migrations');
 
 let activeDbInstance = null;
 
-class BetterSqliteAdapter {
+class OpSqliteAdapter {
   constructor(rawDb) {
     this._db = rawDb;
     this.isTransaction = false;
   }
 
-  execute(sql, params = []) {
-    try {
-      const stmt = this._db.prepare(sql);
-      if (stmt.reader) {
-        const rows = stmt.all(...params);
-        return {
-          rows: rows || [],
-          rowsAffected: 0,
-        };
-      } else {
-        const info = stmt.run(...params);
-        return {
-          rows: [],
-          rowsAffected: info.changes || 0,
-          insertId: info.lastInsertRowid !== undefined ? Number(info.lastInsertRowid) : undefined,
-        };
-      }
-    } catch (err) {
-      throw err;
-    }
-  }
-
-
-  transaction(callback) {
-    // If already in a transaction, just execute the callback
-    if (this.isTransaction) {
-      return callback(this);
-    }
-
-    this._db.exec('BEGIN IMMEDIATE;');
-    this.isTransaction = true;
-    try {
-      const result = callback(this);
-      this._db.exec('COMMIT;');
-      this.isTransaction = false;
-      return result;
-    } catch (err) {
-      try {
-        this._db.exec('ROLLBACK;');
-      } catch (rollbackErr) {
-        // ignore rollback errors if already rolled back
-      }
-      this.isTransaction = false;
-      throw err;
-    }
-  }
-
-  close() {
-    if (this._db) {
-      this._db.close();
-      this._db = null;
-    }
-  }
-}
-
-class OpSqliteAdapter {
-  constructor(rawDb) {
-    this._db = rawDb;
-  }
-
-  execute(sql, params = []) {
-    const res = this._db.execute(sql, params);
+  async execute(sql, params = []) {
+    const res = await this._db.execute(sql, params);
     const rows = res.rows ? (res.rows._array || res.rows) : [];
     return {
       rows: Array.isArray(rows) ? rows : [],
@@ -84,21 +24,32 @@ class OpSqliteAdapter {
     };
   }
 
-  transaction(callback) {
-    return this._db.transaction(async (tx) => {
-      const txAdapter = {
-        execute: (sql, params = []) => {
-          const res = tx.execute(sql, params);
-          const rows = res.rows ? (res.rows._array || res.rows) : [];
-          return {
-            rows: Array.isArray(rows) ? rows : [],
-            rowsAffected: res.rowsAffected || 0,
-            insertId: res.insertId,
-          };
-        },
-      };
-      return callback(txAdapter);
+  async transaction(callback) {
+    if (this.isTransaction) {
+      return await callback(this);
+    }
+
+    let result;
+    await this._db.transaction(async (tx) => {
+      this.isTransaction = true;
+      try {
+        const txAdapter = {
+          execute: async (sql, params = []) => {
+            const res = await tx.execute(sql, params);
+            const rows = res.rows ? (res.rows._array || res.rows) : [];
+            return {
+              rows: Array.isArray(rows) ? rows : [],
+              rowsAffected: res.rowsAffected || 0,
+              insertId: res.insertId,
+            };
+          },
+        };
+        result = await callback(txAdapter);
+      } finally {
+        this.isTransaction = false;
+      }
     });
+    return result;
   }
 
   close() {
@@ -111,12 +62,12 @@ class OpSqliteAdapter {
 
 /**
  * Initializes and returns the active database adapter.
- * Runs PRAGMA configurations and database migrations.
+ * In production / React Native runtime, opens @op-engineering/op-sqlite.
+ * In test environments, options.driver can be supplied (dependency injection).
  */
-function initDatabase(options = {}) {
+async function initDatabase(options = {}) {
   const {
     name = 'campussafe.db',
-    inMemory = false,
     driver = null,
   } = options;
 
@@ -125,43 +76,31 @@ function initDatabase(options = {}) {
   if (driver) {
     adapter = driver;
   } else {
-    // Detect environment: React Native vs Node / Jest
-    const isReactNative = typeof navigator !== 'undefined' && navigator.product === 'ReactNative';
-
-    if (isReactNative) {
-      const { open } = require('@op-engineering/op-sqlite');
-      const rawDb = open({ name });
-      adapter = new OpSqliteAdapter(rawDb);
-    } else {
-      // In Node/Jest environment, use better-sqlite3
-      const Database = require('better-sqlite3');
-      const dbPath = inMemory ? ':memory:' : name;
-      const rawDb = new Database(dbPath);
-      adapter = new BetterSqliteAdapter(rawDb);
-    }
+    // Native React Native runtime
+    const { open } = require('@op-engineering/op-sqlite');
+    const rawDb = open({ name });
+    adapter = new OpSqliteAdapter(rawDb);
   }
 
   // 1. Enable Foreign Keys
-  adapter.execute('PRAGMA foreign_keys = ON;');
+  await adapter.execute('PRAGMA foreign_keys = ON;');
 
   // 2. Configure WAL Journal mode (where supported)
-  if (!inMemory) {
-    try {
-      adapter.execute('PRAGMA journal_mode = WAL;');
-    } catch (e) {
-      // WAL may not be supported on in-memory or certain virtual filesystems
-    }
+  try {
+    await adapter.execute('PRAGMA journal_mode = WAL;');
+  } catch (e) {
+    // WAL may not be supported on in-memory or certain virtual filesystems
   }
 
   // 3. Normal synchronous for mobile durability & performance balance
   try {
-    adapter.execute('PRAGMA synchronous = NORMAL;');
+    await adapter.execute('PRAGMA synchronous = NORMAL;');
   } catch (e) {
     // Ignore pragma error if unsupported
   }
 
   // 4. Run versioned migrations
-  runMigrations(adapter);
+  await runMigrations(adapter);
 
   activeDbInstance = adapter;
   return adapter;
@@ -169,8 +108,13 @@ function initDatabase(options = {}) {
 
 function getDatabase() {
   if (!activeDbInstance) {
-    return initDatabase();
+    throw new Error('Database not initialized. Call initDatabase() first.');
   }
+  return activeDbInstance;
+}
+
+function setDatabase(adapter) {
+  activeDbInstance = adapter;
   return activeDbInstance;
 }
 
@@ -184,7 +128,7 @@ function closeDatabase() {
 module.exports = {
   initDatabase,
   getDatabase,
+  setDatabase,
   closeDatabase,
-  BetterSqliteAdapter,
   OpSqliteAdapter,
 };

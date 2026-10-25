@@ -2,9 +2,11 @@
  * CampusSafe SOS Queue Repository
  * Manages high-priority SOS emergency queue with idempotency and lifecycle tracking.
  * Never pruned by location telemetry cleaners.
+ *
+ * Uses unified async transaction contract.
  */
 
-function enqueueSos(db, sosRecord) {
+async function enqueueSos(db, sosRecord) {
   if (!sosRecord || !sosRecord.idempotency_key) {
     throw new Error('idempotency_key is required for SOS creation');
   }
@@ -12,11 +14,13 @@ function enqueueSos(db, sosRecord) {
   const triggeredAt = sosRecord.triggered_at || new Date().toISOString();
   const triggerType = sosRecord.trigger_type || 'MANUAL';
 
-  return db.transaction((tx) => {
+  return await db.transaction(async (tx) => {
     // 1. Idempotency check
-    const existing = tx.execute(
-      'SELECT * FROM sos_queue WHERE idempotency_key = ?;',
-      [sosRecord.idempotency_key]
+    const existing = (
+      await tx.execute(
+        'SELECT * FROM sos_queue WHERE idempotency_key = ?;',
+        [sosRecord.idempotency_key]
+      )
     ).rows;
 
     if (existing && existing.length > 0) {
@@ -24,7 +28,7 @@ function enqueueSos(db, sosRecord) {
     }
 
     // 2. Insert new record with status PENDING
-    tx.execute(
+    await tx.execute(
       `INSERT INTO sos_queue (
         idempotency_key, campus_id, session_id, trigger_type,
         latitude, longitude, accuracy_meters, triggered_at, status
@@ -41,80 +45,94 @@ function enqueueSos(db, sosRecord) {
       ]
     );
 
-    const rows = tx.execute(
-      'SELECT * FROM sos_queue WHERE idempotency_key = ?;',
-      [sosRecord.idempotency_key]
+    const rows = (
+      await tx.execute(
+        'SELECT * FROM sos_queue WHERE idempotency_key = ?;',
+        [sosRecord.idempotency_key]
+      )
     ).rows;
     return rows[0];
   });
 }
 
-function getPendingSos(db) {
-  return db.execute(
-    "SELECT * FROM sos_queue WHERE status = 'PENDING' ORDER BY triggered_at ASC;"
+async function getPendingSos(db) {
+  return (
+    await db.execute(
+      "SELECT * FROM sos_queue WHERE status = 'PENDING' ORDER BY triggered_at ASC;"
+    )
   ).rows;
 }
 
-function markSosSyncing(db, idempotencyKey) {
-  return db.transaction((tx) => {
-    tx.execute(
+async function markSosSyncing(db, idempotencyKey) {
+  return await db.transaction(async (tx) => {
+    await tx.execute(
       "UPDATE sos_queue SET status = 'SYNCING' WHERE idempotency_key = ? AND status = 'PENDING';",
       [idempotencyKey]
     );
-    const rows = tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey]).rows;
+    const rows = (
+      await tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey])
+    ).rows;
     return rows[0] || null;
   });
 }
 
-function markSosServerReceived(db, idempotencyKey, serverSosId) {
-  return db.transaction((tx) => {
-    tx.execute(
+async function markSosServerReceived(db, idempotencyKey, serverSosId) {
+  return await db.transaction(async (tx) => {
+    await tx.execute(
       "UPDATE sos_queue SET status = 'SERVER_RECEIVED', server_sos_id = ? WHERE idempotency_key = ?;",
       [serverSosId, idempotencyKey]
     );
-    const rows = tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey]).rows;
+    const rows = (
+      await tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey])
+    ).rows;
     return rows[0] || null;
   });
 }
 
-function markSosAcknowledged(db, idempotencyKey, acknowledgedAt = null) {
+async function markSosAcknowledged(db, idempotencyKey, acknowledgedAt = null) {
   const ackTime = acknowledgedAt || new Date().toISOString();
-  return db.transaction((tx) => {
-    tx.execute(
+  return await db.transaction(async (tx) => {
+    await tx.execute(
       "UPDATE sos_queue SET status = 'SERVER_ACKNOWLEDGED', acknowledged_at = ? WHERE idempotency_key = ?;",
       [ackTime, idempotencyKey]
     );
-    const rows = tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey]).rows;
+    const rows = (
+      await tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey])
+    ).rows;
     return rows[0] || null;
   });
 }
 
-function markSosResolved(db, idempotencyKey, resolvedAt = null) {
+async function markSosResolved(db, idempotencyKey, resolvedAt = null) {
   const resTime = resolvedAt || new Date().toISOString();
-  return db.transaction((tx) => {
-    tx.execute(
+  return await db.transaction(async (tx) => {
+    await tx.execute(
       "UPDATE sos_queue SET status = 'RESOLVED', resolved_at = ? WHERE idempotency_key = ?;",
       [resTime, idempotencyKey]
     );
-    const rows = tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey]).rows;
+    const rows = (
+      await tx.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey])
+    ).rows;
     return rows[0] || null;
   });
 }
 
-function recoverStaleSosSyncing(db) {
-  const res = db.execute(
+async function recoverStaleSosSyncing(db) {
+  const res = await db.execute(
     "UPDATE sos_queue SET status = 'PENDING' WHERE status = 'SYNCING';"
   );
   return res.rowsAffected || 0;
 }
 
-function getSosByIdempotencyKey(db, idempotencyKey) {
-  const rows = db.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey]).rows;
+async function getSosByIdempotencyKey(db, idempotencyKey) {
+  const rows = (
+    await db.execute('SELECT * FROM sos_queue WHERE idempotency_key = ?;', [idempotencyKey])
+  ).rows;
   return rows && rows.length > 0 ? rows[0] : null;
 }
 
-function listAllSos(db) {
-  return db.execute('SELECT * FROM sos_queue ORDER BY triggered_at DESC;').rows;
+async function listAllSos(db) {
+  return (await db.execute('SELECT * FROM sos_queue ORDER BY triggered_at DESC;')).rows;
 }
 
 module.exports = {

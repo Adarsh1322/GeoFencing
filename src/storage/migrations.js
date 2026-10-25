@@ -1,15 +1,15 @@
 /**
  * CampusSafe Versioned Database Migrations
- * Repeatable, transactional, and idempotent.
+ * Repeatable, transactional, and idempotent async migrations.
  */
 
 const MIGRATIONS = [
   {
     version: 1,
     name: 'initial_offline_schema',
-    up: (db) => {
+    up: async (db) => {
       // 1. Local Safety Sessions
-      db.execute(`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS local_sessions (
           id TEXT PRIMARY KEY,
           campus_id TEXT NOT NULL,
@@ -25,7 +25,7 @@ const MIGRATIONS = [
 
       // 2. Durable Location Telemetry Queue
       // RULE: ON DELETE NO ACTION ensures session cleanup cannot cascade-delete unsynced points
-      db.execute(`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS location_queue (
           client_point_id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -42,18 +42,18 @@ const MIGRATIONS = [
         );
       `);
 
-      db.execute(`
+      await db.execute(`
         CREATE INDEX IF NOT EXISTS idx_location_queue_status_seq 
         ON location_queue (status, seq_no ASC);
       `);
 
-      db.execute(`
+      await db.execute(`
         CREATE INDEX IF NOT EXISTS idx_location_queue_session 
         ON location_queue (session_id, status);
       `);
 
       // 3. Permanently Rejected Location Records (Audit Evidence)
-      db.execute(`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS rejected_points_log (
           client_point_id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -67,7 +67,7 @@ const MIGRATIONS = [
       `);
 
       // 4. High-Priority SOS Queue (Never pruned by telemetry cleanup)
-      db.execute(`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS sos_queue (
           idempotency_key TEXT PRIMARY KEY,
           campus_id TEXT,
@@ -87,7 +87,7 @@ const MIGRATIONS = [
       `);
 
       // 5. Local Telemetry Gap Audit Log
-      db.execute(`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS telemetry_gaps (
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -99,7 +99,7 @@ const MIGRATIONS = [
       `);
 
       // 6. Cached Campus Boundaries & Schedules
-      db.execute(`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS campus_cache (
           id TEXT PRIMARY KEY,
           code TEXT NOT NULL,
@@ -122,9 +122,9 @@ const MIGRATIONS = [
  * Runs pending migrations within transactions.
  * Safe to execute repeatedly without duplicating objects or losing data.
  */
-function runMigrations(db) {
+async function runMigrations(db) {
   // Ensure schema_migrations table exists
-  db.execute(`
+  await db.execute(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -133,15 +133,16 @@ function runMigrations(db) {
   `);
 
   for (const migration of MIGRATIONS) {
-    const existing = db.execute(
+    const res = await db.execute(
       'SELECT version FROM schema_migrations WHERE version = ?;',
       [migration.version]
-    ).rows;
+    );
+    const existing = res.rows;
 
     if (!existing || existing.length === 0) {
-      db.transaction((tx) => {
-        migration.up(tx);
-        tx.execute(
+      await db.transaction(async (tx) => {
+        await migration.up(tx);
+        await tx.execute(
           'INSERT INTO schema_migrations (version, name) VALUES (?, ?);',
           [migration.version, migration.name]
         );
