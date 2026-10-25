@@ -1,0 +1,22 @@
+services:
+  campussafe-db:
+    image: postgis/postgis:16-3.4
+    container_name: campussafe_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-campussafe_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-campussafe_secret_password}
+      POSTGRES_DB: ${DB_NAME:-campussafe}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-campussafe_app} -d ${DB_NAME:-campussafe}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    driver: local
