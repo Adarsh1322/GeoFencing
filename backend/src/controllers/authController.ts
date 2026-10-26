@@ -35,9 +35,10 @@ export async function register(req: Request, res: Response, next: NextFunction):
     const data = registerSchema.parse(req.body);
 
     // 1. Verify campus exists
-    const campusRes = await query<Campus>('SELECT id FROM campuses WHERE code = $1;', [
-      data.campusCode,
-    ]);
+    const campusRes = await query<Campus>(
+      'SELECT id FROM campuses WHERE UPPER(code) = UPPER($1) OR (UPPER($1) = \'CSEU\' AND code = \'LPU\');',
+      [data.campusCode]
+    );
     if (campusRes.rowCount === 0) {
       res.status(400).json({
         error: { code: 'INVALID_CAMPUS', message: `Campus code "${data.campusCode}" not found` },

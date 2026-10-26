@@ -12,11 +12,16 @@ export interface Campus {
   code: string;
   name: string;
   timezone: string;
+  boundary_geojson?: {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: any;
+  };
   geofence_polygon?: {
-    type: 'Polygon';
-    coordinates: number[][][]; // [ [ [lng, lat], ... ] ]
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: any;
   };
   center_lat?: number;
+  center_lon?: number;
   center_lng?: number;
   radius_meters?: number;
 }

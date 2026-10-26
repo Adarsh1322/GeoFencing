@@ -16,7 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { COLORS } from '../constants/colors';
 
 const AVAILABLE_CAMPUSES = [
-  { code: 'CSEU', name: 'Chitkara School of Eng (CSEU)' },
+  { code: 'LPU', name: 'Lovely Professional University (LPU)' },
   { code: 'MPI', name: 'Metro Polytechnic Inst (MPI)' },
 ];
 
@@ -26,7 +26,7 @@ export default function RegisterScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rollNumber, setRollNumber] = useState('');
-  const [campusCode, setCampusCode] = useState('CSEU');
+  const [campusCode, setCampusCode] = useState('LPU');
   const [phone, setPhone] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);

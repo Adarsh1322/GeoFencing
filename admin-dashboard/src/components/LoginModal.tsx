@@ -167,13 +167,13 @@ export default function LoginModal({ onSuccess }: LoginModalProps) {
                     Prof. Rajesh Sharma
                   </p>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-semibold">
-                    CSEU
+                    LPU
                   </span>
                 </div>
-                <p className="text-[10px] text-slate-400 mt-0.5">Director &amp; Campus Admin</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Director &amp; LPU Admin</p>
               </div>
               <span className="text-[10px] text-blue-400/80 font-medium mt-2 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
-                Log in as CSEU &rarr;
+                Log in as LPU &rarr;
               </span>
             </button>
 

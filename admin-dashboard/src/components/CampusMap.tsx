@@ -32,9 +32,9 @@ export default function CampusMap({
     const initMap = async () => {
       const L = (await import('leaflet')).default;
 
-      // Default center: Campus coordinates or Delhi NCR default
-      const defaultLat = campus?.center_lat || 28.545;
-      const defaultLng = (campus as any)?.center_lon || campus?.center_lng || 77.272;
+      // Default center: Lovely Professional University (LPU), Phagwara, Punjab
+      const defaultLat = campus?.center_lat || 31.2536;
+      const defaultLng = (campus as any)?.center_lon || campus?.center_lng || 75.7037;
 
       const container = mapContainerRef.current;
       if (!container || (container as any)._leaflet_id) {
@@ -96,8 +96,15 @@ export default function CampusMap({
       });
 
       // 1. Draw Campus Geofence Polygon
-      if (campus?.geofence_polygon?.coordinates?.[0]) {
-        const rawCoords = campus.geofence_polygon.coordinates[0];
+      const boundary = campus?.boundary_geojson || campus?.geofence_polygon;
+      let rawCoords: number[][] | null = null;
+      if (boundary?.type === 'MultiPolygon' && boundary.coordinates?.[0]?.[0]) {
+        rawCoords = boundary.coordinates[0][0];
+      } else if (boundary?.type === 'Polygon' && boundary.coordinates?.[0]) {
+        rawCoords = boundary.coordinates[0];
+      }
+
+      if (rawCoords && rawCoords.length > 0) {
         // Convert [lng, lat] to [lat, lng]
         const latLngs: [number, number][] = rawCoords.map((c) => [c[1], c[0]] as [number, number]);
 
@@ -111,13 +118,33 @@ export default function CampusMap({
         }).addTo(map);
 
         polygon.bindTooltip(
-          `<strong>${campus.name}</strong><br/><span style="color:#10b981">Verified 100m Geofence Perimeter</span>`,
+          `<strong>${campus?.name || 'Campus'}</strong><br/><span style="color:#10b981">Verified 100m Geofence Perimeter (${campus?.code || 'LPU'})</span>`,
           { sticky: true, className: 'glass-card text-xs text-white' }
         );
 
         // Center view on campus
         if (students.length === 0) {
           map.fitBounds(polygon.getBounds(), { padding: [40, 40] });
+        }
+      } else if (campus?.center_lat && (campus?.center_lon || campus?.center_lng)) {
+        const centerLon = campus.center_lon || campus.center_lng!;
+        const circle = L.circle([campus.center_lat, centerLon], {
+          radius: campus.radius_meters || 1200,
+          color: '#10b981',
+          weight: 2.5,
+          opacity: 0.9,
+          fillColor: '#10b981',
+          fillOpacity: 0.12,
+          dashArray: '6, 6',
+        }).addTo(map);
+
+        circle.bindTooltip(
+          `<strong>${campus.name}</strong><br/><span style="color:#10b981">Verified Geofence (${campus.radius_meters || 1200}m)</span>`,
+          { sticky: true, className: 'glass-card text-xs text-white' }
+        );
+
+        if (students.length === 0) {
+          map.fitBounds(circle.getBounds(), { padding: [40, 40] });
         }
       }
 
@@ -200,10 +227,9 @@ export default function CampusMap({
   const handleResetView = async () => {
     if (!mapInstanceRef.current) return;
     const map: any = mapInstanceRef.current;
-    const centerLon = (campus as any)?.center_lon || campus?.center_lng || 77.272;
-    if (campus?.center_lat && centerLon) {
-      map.setView([campus.center_lat, centerLon], 16, { animate: true });
-    }
+    const centerLat = campus?.center_lat || 31.2536;
+    const centerLon = (campus as any)?.center_lon || campus?.center_lng || 75.7037;
+    map.setView([centerLat, centerLon], 16, { animate: true });
   };
 
   return (

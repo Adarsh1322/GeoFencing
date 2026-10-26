@@ -46,8 +46,9 @@ export default function AdminDashboardPage() {
       const list = res.campuses || [];
       setCampuses(list);
       if (list.length > 0 && !selectedCampusId) {
-        // Prioritize CSEU or admin's first campus
-        setSelectedCampusId(list[0].id);
+        // Prioritize Lovely Professional University (LPU)
+        const lpu = list.find((c) => c.code === 'LPU');
+        setSelectedCampusId(lpu ? lpu.id : list[0].id);
       }
     }).catch((err) => {
       console.warn('Failed to load campuses:', err);

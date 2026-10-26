@@ -12,17 +12,17 @@ export async function seedDatabase(): Promise<void> {
     await client.query('BEGIN');
 
     // 1. Campuses
-    // Primary Campus: CampusSafe Engineering University (CSEU)
-    const cseuBoundary = {
+    // Primary Campus: Lovely Professional University (LPU)
+    const lpuBoundary = {
       type: 'MultiPolygon',
       coordinates: [
         [
           [
-            [77.2680, 28.5420],
-            [77.2760, 28.5420],
-            [77.2760, 28.5480],
-            [77.2680, 28.5480],
-            [77.2680, 28.5420],
+            [75.6940, 31.2620],
+            [75.7140, 31.2620],
+            [75.7140, 31.2460],
+            [75.6940, 31.2460],
+            [75.6940, 31.2620],
           ],
         ],
       ],
@@ -31,9 +31,9 @@ export async function seedDatabase(): Promise<void> {
     const cseuRes = await client.query(
       `INSERT INTO campuses (name, code, boundary_geojson, center_lat, center_lon, radius_meters, timezone, is_active, boundary_version)
        VALUES ($1, $2, $3, $4, $5, $6, $7, true, 1)
-       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, boundary_geojson = EXCLUDED.boundary_geojson
+       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, boundary_geojson = EXCLUDED.boundary_geojson, center_lat = EXCLUDED.center_lat, center_lon = EXCLUDED.center_lon
        RETURNING id, code;`,
-      ['CampusSafe Engineering University', 'CSEU', JSON.stringify(cseuBoundary), 28.5450, 77.2720, 800, 'Asia/Kolkata']
+      ['Lovely Professional University', 'LPU', JSON.stringify(lpuBoundary), 31.2536, 75.7037, 1200, 'Asia/Kolkata']
     );
     const cseuId = cseuRes.rows[0].id;
 
