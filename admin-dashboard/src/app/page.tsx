@@ -173,22 +173,26 @@ export default function AdminDashboardPage() {
 
   if (isInitializing) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-sm">
-        Initializing CampusSafe Operations Console...
+      <div className="min-h-screen bg-[#070a13] flex flex-col items-center justify-center text-slate-400 text-sm gap-3">
+        <div className="h-8 w-8 border-2 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
+        <span className="font-semibold text-slate-300">Initializing CampusSafe Operations Console...</span>
       </div>
+    );
+  }
+
+  // Dedicated Login Screen when not authenticated
+  if (!admin) {
+    return (
+      <LoginModal
+        onSuccess={(loggedInAdmin) => {
+          setAdmin(loggedInAdmin);
+        }}
+      />
     );
   }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#070b12] text-slate-100">
-      {/* If not logged in, show Login Modal */}
-      {!admin && (
-        <LoginModal
-          onSuccess={(loggedInAdmin) => {
-            setAdmin(loggedInAdmin);
-          }}
-        />
-      )}
 
       {/* Top Navbar */}
       <Navbar
@@ -227,6 +231,24 @@ export default function AdminDashboardPage() {
             activeSos={activeSos}
             onSelectTab={setActiveTab}
           />
+
+          {/* Pending Verification Notice Banner */}
+          {pendingStudents.length > 0 && (
+            <div className="flex items-center justify-between p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 shadow-md">
+              <div className="flex items-center gap-2.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-ping" />
+                <span className="text-xs font-bold">
+                  Action Required: {pendingStudents.length} student membership request{pendingStudents.length > 1 ? 's' : ''} pending institutional approval.
+                </span>
+              </div>
+              <button
+                onClick={() => setActiveTab('approvals')}
+                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition cursor-pointer"
+              >
+                Review Now &rarr;
+              </button>
+            </div>
+          )}
 
           {/* Active Tab View */}
           {activeTab === 'map' && (

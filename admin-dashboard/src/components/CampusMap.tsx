@@ -34,7 +34,7 @@ export default function CampusMap({
 
       // Default center: Campus coordinates or Delhi NCR default
       const defaultLat = campus?.center_lat || 28.545;
-      const defaultLng = campus?.center_lng || 77.192;
+      const defaultLng = (campus as any)?.center_lon || campus?.center_lng || 77.272;
 
       const container = mapContainerRef.current;
       if (!container || (container as any)._leaflet_id) {
@@ -49,11 +49,22 @@ export default function CampusMap({
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      // Dark theme OpenStreetMap tiles
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map);
+      // Esri Dark Gray Canvas Base (Official GIS standard, zero watermark, free)
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        {
+          attribution: '&copy; Esri, DeLorme, NAVTEQ',
+          maxZoom: 18,
+        }
+      ).addTo(map);
+
+      // Esri Reference Labels Overlay
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 18,
+        }
+      ).addTo(map);
 
       mapInstanceRef.current = map;
       setIsMapReady(true);
@@ -189,15 +200,16 @@ export default function CampusMap({
   const handleResetView = async () => {
     if (!mapInstanceRef.current) return;
     const map: any = mapInstanceRef.current;
-    if (campus?.center_lat && campus?.center_lng) {
-      map.setView([campus.center_lat, campus.center_lng], 16, { animate: true });
+    const centerLon = (campus as any)?.center_lon || campus?.center_lng || 77.272;
+    if (campus?.center_lat && centerLon) {
+      map.setView([campus.center_lat, centerLon], 16, { animate: true });
     }
   };
 
   return (
-    <div className="relative w-full h-[600px] lg:h-[650px] rounded-3xl overflow-hidden glass-card border border-slate-800 shadow-2xl">
+    <div className="relative w-full h-[600px] lg:h-[650px] rounded-3xl overflow-hidden glass-card border border-slate-800 shadow-2xl isolate z-0">
       {/* Map Filter Controls Bar */}
-      <div className="absolute top-4 left-4 z-[500] flex flex-wrap items-center gap-2 p-2 rounded-2xl glass-panel border border-slate-700/60 shadow-xl">
+      <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2 p-2 rounded-2xl glass-panel border border-slate-700/60 shadow-xl">
         <button
           onClick={() => setFilter('ALL')}
           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${

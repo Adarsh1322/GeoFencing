@@ -25,7 +25,17 @@ export default function StatsCards({
 
   const cards = [
     {
-      title: 'Active Inside Geofence',
+      title: 'Enrolled Students',
+      value: totalStudents,
+      sub: `${insideGeofence} currently inside 100m geofence`,
+      icon: <Users className="h-5 w-5 text-blue-400" />,
+      border: 'border-blue-500/20',
+      glow: 'shadow-blue-500/5',
+      badgeColor: 'text-blue-400 bg-blue-500/10',
+      action: () => onSelectTab('attendance'),
+    },
+    {
+      title: 'Inside Campus (Safe)',
       value: insideGeofence,
       sub: `${totalStudents > 0 ? Math.round((insideGeofence / totalStudents) * 100) : 0}% of active campus population`,
       icon: <CheckCircle2 className="h-5 w-5 text-emerald-400" />,
@@ -53,16 +63,6 @@ export default function StatsCards({
       glow: 'shadow-red-500/10',
       badgeColor: 'text-red-400 bg-red-500/10',
       action: () => onSelectTab('sos'),
-    },
-    {
-      title: 'Pending Approvals',
-      value: pendingCount,
-      sub: 'New registrations waiting verification',
-      icon: <UserPlus className="h-5 w-5 text-blue-400" />,
-      border: 'border-blue-500/20',
-      glow: 'shadow-blue-500/5',
-      badgeColor: 'text-blue-400 bg-blue-500/10',
-      action: () => onSelectTab('approvals'),
     },
   ];
 
