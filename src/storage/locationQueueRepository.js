@@ -23,18 +23,39 @@ async function enqueueLocationPoint(db, point) {
   }
 
   return await db.transaction(async (tx) => {
+    // Resolve student_user_id if not explicitly provided
+    let studentUserId = point.student_user_id || null;
+    if (!studentUserId) {
+      const sessRes = (
+        await tx.execute('SELECT student_user_id FROM local_sessions WHERE id = ?;', [point.session_id])
+      ).rows;
+      if (sessRes && sessRes.length > 0 && sessRes[0].student_user_id) {
+        studentUserId = sessRes[0].student_user_id;
+      }
+    }
+
+    // If point has no student_user_id and parent session has no student_user_id, it is unowned -> quarantine it
+    const isQuarantined =
+      point.is_quarantined !== undefined
+        ? point.is_quarantined
+        : studentUserId
+        ? 0
+        : 1;
+
     await tx.execute(
       `INSERT INTO location_queue (
-        client_point_id, session_id, seq_no, latitude, longitude, accuracy_meters, captured_at, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING');`,
+        client_point_id, session_id, student_user_id, seq_no, latitude, longitude, accuracy_meters, captured_at, status, is_quarantined
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?);`,
       [
         point.client_point_id,
         point.session_id,
+        studentUserId,
         point.seq_no,
         point.latitude,
         point.longitude,
         point.accuracy_meters !== undefined ? point.accuracy_meters : null,
         point.captured_at,
+        isQuarantined,
       ]
     );
 
@@ -49,10 +70,35 @@ async function enqueueLocationPoint(db, point) {
 }
 
 /**
- * Atomically claims up to batchSize points strictly scoped to a single session_id.
+ * Atomically claims up to batchSize points strictly scoped to a single session_id and student_user_id.
+ * Enforces fail-closed identity: studentUserId is mandatory and unscoped queries are strictly rejected.
  * Returns { sessionId, batchId, points }.
  */
-async function claimNextBatch(db, batchSize = 50, batchId = null) {
+async function claimNextBatch(db, optionsOrBatchSize = 50, explicitBatchId = null) {
+  let studentUserId = null;
+  let batchSize = 50;
+  let batchId = null;
+
+  if (typeof optionsOrBatchSize === 'object' && optionsOrBatchSize !== null) {
+    studentUserId = optionsOrBatchSize.studentUserId || null;
+    batchSize = optionsOrBatchSize.batchSize || 50;
+    batchId = optionsOrBatchSize.batchId || null;
+  } else if (typeof optionsOrBatchSize === 'string') {
+    // claimNextBatch(db, studentUserId, batchSize, batchId)
+    studentUserId = optionsOrBatchSize;
+    batchSize = typeof explicitBatchId === 'number' ? explicitBatchId : 50;
+    batchId = arguments[3] || null;
+  } else {
+    // legacy attempt: claimNextBatch(db, batchSize, batchId) without student identity
+    batchSize = optionsOrBatchSize || 50;
+    batchId = explicitBatchId || null;
+  }
+
+  // Fail-closed enforcement: Never allow unscoped batch claiming
+  if (!studentUserId) {
+    throw new Error('studentUserId is required for claimNextBatch (fail-closed identity scoping)');
+  }
+
   if (batchSize <= 0) {
     throw new Error('batchSize must be greater than 0');
   }
@@ -60,10 +106,13 @@ async function claimNextBatch(db, batchSize = 50, batchId = null) {
   const generatedBatchId = batchId || `batch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
   return await db.transaction(async (tx) => {
-    // 1. Identify the target session deterministically (oldest session with pending points)
+    // 1. Identify target session deterministically
     const sessionRes = (
       await tx.execute(
-        "SELECT session_id FROM location_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 1;"
+        `SELECT session_id FROM location_queue 
+         WHERE status = 'PENDING' AND student_user_id = ? AND is_quarantined = 0 
+         ORDER BY created_at ASC LIMIT 1;`,
+        [studentUserId]
       )
     ).rows;
 
@@ -77,15 +126,14 @@ async function claimNextBatch(db, batchSize = 50, batchId = null) {
 
     const targetSessionId = sessionRes[0].session_id;
 
-    // 2. Select IDs strictly for targetSessionId up to batchSize ordered by seq_no ASC
-    const candidates = (
-      await tx.execute(
-        `SELECT client_point_id FROM location_queue 
-         WHERE status = 'PENDING' AND session_id = ? 
-         ORDER BY seq_no ASC LIMIT ?;`,
-        [targetSessionId, batchSize]
-      )
-    ).rows;
+    // 2. Select IDs strictly for targetSessionId and studentUserId up to batchSize ordered by seq_no ASC
+    const candidatesRes = await tx.execute(
+      `SELECT client_point_id FROM location_queue 
+       WHERE status = 'PENDING' AND session_id = ? AND student_user_id = ? AND is_quarantined = 0 
+       ORDER BY seq_no ASC LIMIT ?;`,
+      [targetSessionId, studentUserId, batchSize]
+    );
+    const candidates = candidatesRes.rows;
 
     if (!candidates || candidates.length === 0) {
       return {
@@ -109,7 +157,7 @@ async function claimNextBatch(db, batchSize = 50, batchId = null) {
     const placeholders = pointIds.map(() => '?').join(',');
     const claimedRows = (
       await tx.execute(
-        `SELECT client_point_id, session_id, seq_no, latitude, longitude, accuracy_meters, captured_at, retry_count
+        `SELECT client_point_id, session_id, student_user_id, seq_no, latitude, longitude, accuracy_meters, captured_at, retry_count
          FROM location_queue 
          WHERE batch_id = ? AND client_point_id IN (${placeholders})
          ORDER BY seq_no ASC;`,
@@ -166,9 +214,9 @@ async function handleBatchAcknowledgement(db, batchId, results = []) {
             const reason = item.reason || 'PERMANENT_SERVER_REJECTION';
             await tx.execute(
               `INSERT OR REPLACE INTO rejected_points_log (
-                client_point_id, session_id, seq_no, latitude, longitude, captured_at, reason
+                client_point_id, session_id, student_user_id, seq_no, latitude, longitude, captured_at, reason
               )
-              SELECT client_point_id, session_id, seq_no, latitude, longitude, captured_at, ?
+              SELECT client_point_id, session_id, student_user_id, seq_no, latitude, longitude, captured_at, ?
               FROM location_queue
               WHERE client_point_id = ?;`,
               [reason, item.client_point_id]
@@ -201,18 +249,20 @@ async function handleBatchAcknowledgement(db, batchId, results = []) {
 /**
  * Recovers orphaned SYNCING records (e.g. after process crash or restart).
  */
-async function recoverStaleSyncingRecords(db, targetSessionId = null) {
+async function recoverStaleSyncingRecords(db, targetSessionId = null, studentUserId = null) {
+  let sql = "UPDATE location_queue SET status = 'PENDING', batch_id = NULL WHERE status = 'SYNCING'";
+  const params = [];
+
   if (targetSessionId) {
-    const res = await db.execute(
-      "UPDATE location_queue SET status = 'PENDING', batch_id = NULL WHERE status = 'SYNCING' AND session_id = ?;",
-      [targetSessionId]
-    );
-    return res.rowsAffected || 0;
+    sql += " AND session_id = ?";
+    params.push(targetSessionId);
+  }
+  if (studentUserId) {
+    sql += " AND student_user_id = ?";
+    params.push(studentUserId);
   }
 
-  const res = await db.execute(
-    "UPDATE location_queue SET status = 'PENDING', batch_id = NULL WHERE status = 'SYNCING';"
-  );
+  const res = await db.execute(sql + ';', params);
   return res.rowsAffected || 0;
 }
 
@@ -278,43 +328,122 @@ async function pruneLocationQueue(db, maxCapacity = 10000, targetCount = 8000) {
   });
 }
 
-async function getQueueStatus(db, sessionId = null) {
-  if (sessionId) {
-    const rows = (
-      await db.execute(
-        `SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending,
-          SUM(CASE WHEN status = 'SYNCING' THEN 1 ELSE 0 END) as syncing
-         FROM location_queue WHERE session_id = ?;`,
-        [sessionId]
-      )
-    ).rows;
-    return rows[0] || { total: 0, pending: 0, syncing: 0 };
+async function getQueueStatus(db, sessionIdOrOptions = null) {
+  let sessionId = null;
+  let studentUserId = null;
+
+  if (typeof sessionIdOrOptions === 'object' && sessionIdOrOptions !== null) {
+    sessionId = sessionIdOrOptions.sessionId || null;
+    studentUserId = sessionIdOrOptions.studentUserId || null;
+  } else if (typeof sessionIdOrOptions === 'string') {
+    sessionId = sessionIdOrOptions;
   }
 
-  const rows = (
-    await db.execute(
-      `SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN status = 'SYNCING' THEN 1 ELSE 0 END) as syncing
-       FROM location_queue;`
-    )
-  ).rows;
-  return rows[0] || { total: 0, pending: 0, syncing: 0 };
+  let sql = `SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN status = 'PENDING' AND is_quarantined = 0 THEN 1 ELSE 0 END) as pending,
+      SUM(CASE WHEN status = 'SYNCING' THEN 1 ELSE 0 END) as syncing,
+      SUM(CASE WHEN is_quarantined = 1 THEN 1 ELSE 0 END) as quarantined
+     FROM location_queue WHERE 1=1`;
+  const params = [];
+
+  if (sessionId) {
+    sql += ' AND session_id = ?';
+    params.push(sessionId);
+  }
+  if (studentUserId) {
+    sql += ' AND student_user_id = ?';
+    params.push(studentUserId);
+  }
+
+  const rows = (await db.execute(sql + ';', params)).rows;
+  return rows[0] || { total: 0, pending: 0, syncing: 0, quarantined: 0 };
 }
 
-async function getRejectedPointsLog(db, sessionId = null) {
+async function getRejectedPointsLog(db, sessionId = null, studentUserId = null) {
+  let sql = 'SELECT * FROM rejected_points_log WHERE 1=1';
+  const params = [];
+
   if (sessionId) {
+    sql += ' AND session_id = ?';
+    params.push(sessionId);
+  }
+  if (studentUserId) {
+    sql += ' AND student_user_id = ?';
+    params.push(studentUserId);
+  }
+
+  sql += ' ORDER BY rejected_at DESC;';
+  return (await db.execute(sql, params)).rows;
+}
+
+/**
+ * Retrieves unowned or quarantined points.
+ */
+async function getQuarantinedPoints(db, studentUserId = null) {
+  if (studentUserId) {
     return (
       await db.execute(
-        'SELECT * FROM rejected_points_log WHERE session_id = ? ORDER BY rejected_at DESC;',
-        [sessionId]
+        'SELECT * FROM location_queue WHERE is_quarantined = 1 AND student_user_id = ? ORDER BY captured_at ASC;',
+        [studentUserId]
       )
     ).rows;
   }
-  return (await db.execute('SELECT * FROM rejected_points_log ORDER BY rejected_at DESC;')).rows;
+  return (
+    await db.execute(
+      'SELECT * FROM location_queue WHERE is_quarantined = 1 ORDER BY captured_at ASC;'
+    )
+  ).rows;
+}
+
+/**
+ * Safely resolves ownership of quarantined records for a given session.
+ * Requires a validated target session context and strictly prevents moving one student's records into another student's account.
+ */
+async function reassignQuarantinedPoints(db, sessionId, studentUserId) {
+  if (!sessionId || !studentUserId) {
+    throw new Error('sessionId and studentUserId are required to reassign quarantined points');
+  }
+
+  return await db.transaction(async (tx) => {
+    // 1. Verify target session existence and ownership
+    const sessionRes = (
+      await tx.execute('SELECT student_user_id FROM local_sessions WHERE id = ?;', [sessionId])
+    ).rows;
+
+    if (!sessionRes || sessionRes.length === 0) {
+      throw new Error(`Cannot reassign points: target session '${sessionId}' does not exist`);
+    }
+
+    const sessionOwner = sessionRes[0].student_user_id;
+    if (sessionOwner && sessionOwner !== studentUserId) {
+      throw new Error(
+        `Cannot reassign points: session '${sessionId}' belongs to student '${sessionOwner}', cannot reassign to '${studentUserId}'`
+      );
+    }
+
+    // Update local_sessions if unassigned
+    if (!sessionOwner) {
+      await tx.execute(
+        'UPDATE local_sessions SET student_user_id = ? WHERE id = ?;',
+        [studentUserId, sessionId]
+      );
+    }
+
+    // 2. Reassign points and release quarantine ONLY if point is unassigned or already belongs to studentUserId
+    const updateRes = await tx.execute(
+      `UPDATE location_queue 
+       SET student_user_id = ?, is_quarantined = 0 
+       WHERE session_id = ? 
+         AND is_quarantined = 1 
+         AND (student_user_id IS NULL OR student_user_id = '' OR student_user_id = ?);`,
+      [studentUserId, sessionId, studentUserId]
+    );
+
+    return {
+      reassignedCount: updateRes.rowsAffected || 0,
+    };
+  });
 }
 
 module.exports = {
@@ -325,4 +454,6 @@ module.exports = {
   pruneLocationQueue,
   getQueueStatus,
   getRejectedPointsLog,
+  getQuarantinedPoints,
+  reassignQuarantinedPoints,
 };

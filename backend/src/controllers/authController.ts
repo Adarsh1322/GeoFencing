@@ -9,6 +9,7 @@ import {
   revokeRefreshToken,
   rotateRefreshToken,
 } from '../services/authService.js';
+import { getActiveStudentSession } from '../services/sessionService.js';
 import { Campus, StudentCampusMembership, User } from '../types/index.js';
 
 const registerSchema = z.object({
@@ -198,7 +199,84 @@ export async function getMe(req: Request, res: Response, next: NextFunction): Pr
       return;
     }
 
-    res.json({ user: userRes.rows[0] });
+    const user = userRes.rows[0];
+
+    let memberships: Array<{
+      id: string;
+      campus_id: string;
+      campus_code: string;
+      campus_name: string;
+      roll_number: string;
+      status: string;
+      approved_at?: Date | null;
+      created_at: Date;
+    }> = [];
+
+    let assignments: Array<{
+      campus_id: string;
+      campus_code: string;
+      campus_name: string;
+      created_at: Date;
+    }> = [];
+
+    let activeSession = null;
+
+    if (user.role === 'STUDENT') {
+      const mRes = await query<{
+        id: string;
+        campus_id: string;
+        campus_code: string;
+        campus_name: string;
+        roll_number: string;
+        status: string;
+        approved_at?: Date | null;
+        created_at: Date;
+      }>(
+        `SELECT
+           scm.id,
+           scm.campus_id,
+           c.code as campus_code,
+           c.name as campus_name,
+           scm.roll_number,
+           scm.status,
+           scm.approved_at,
+           scm.created_at
+         FROM student_campus_memberships scm
+         JOIN campuses c ON scm.campus_id = c.id
+         WHERE scm.student_user_id = $1
+         ORDER BY scm.created_at ASC;`,
+        [user.id]
+      );
+      memberships = mRes.rows;
+
+      activeSession = await getActiveStudentSession(user.id);
+    } else if (user.role === 'CAMPUS_ADMIN') {
+      const aRes = await query<{
+        campus_id: string;
+        campus_code: string;
+        campus_name: string;
+        created_at: Date;
+      }>(
+        `SELECT
+           aca.campus_id,
+           c.code as campus_code,
+           c.name as campus_name,
+           aca.created_at
+         FROM admin_campus_assignments aca
+         JOIN campuses c ON aca.campus_id = c.id
+         WHERE aca.admin_user_id = $1
+         ORDER BY aca.created_at ASC;`,
+        [user.id]
+      );
+      assignments = aRes.rows;
+    }
+
+    res.json({
+      user,
+      memberships,
+      assignments,
+      activeSession,
+    });
   } catch (err) {
     next(err);
   }

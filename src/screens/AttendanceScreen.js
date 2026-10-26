@@ -18,11 +18,14 @@ import { COLORS } from '../constants/colors';
 import { calculateDistanceInMeters } from '../utils/distance';
 import { saveAttendanceRecord } from '../storage/attendanceStorage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '../context/AuthContext';
+import { safetyService } from '../services/safetyService';
 import StatusCard from '../components/StatusCard';
 import styles from '../styles/attendanceScreen.styles';
 
-export default function AttendanceScreen({ navigation }) {
+export default function AttendanceScreen({ navigation, onNavigateTab, isFocused = true }) {
   const insets = useSafeAreaInsets();
+  const { user, accessToken, currentMembership, logout } = useAuth();
   const [currentLocation, setCurrentLocation] = useState(null);
   const [locationError, setLocationError] = useState(null);
   const [isLocating, setIsLocating] = useState(true);
@@ -30,8 +33,39 @@ export default function AttendanceScreen({ navigation }) {
   const [simulatedLocationMode, setSimulatedLocationMode] = useState(null);
   const [mapType, setMapType] = useState('standard');
 
+  // Safety & Safe Campus Journey State
+  const [activeJourney, setActiveJourney] = useState(null);
+  const [isLocationSharing, setIsLocationSharing] = useState(true);
+  const [trackedPointsCount, setTrackedPointsCount] = useState(0);
+  const [isSosActive, setIsSosActive] = useState(false);
+  const [isSosLoading, setIsSosLoading] = useState(false);
+  const [journeyLoading, setJourneyLoading] = useState(false);
+
   const mapRef = useRef(null);
   const watchIdRef = useRef(null);
+  const activeJourneyRef = useRef(null);
+  const isLocationSharingRef = useRef(true);
+  const seqNoRef = useRef(0);
+
+  useEffect(() => {
+    activeJourneyRef.current = activeJourney;
+  }, [activeJourney]);
+
+  useEffect(() => {
+    isLocationSharingRef.current = isLocationSharing;
+  }, [isLocationSharing]);
+
+  // Restore active journey from SQLite when focused or student loaded
+  useEffect(() => {
+    if (isFocused && user?.id) {
+      safetyService
+        .getActiveJourney(user.id)
+        .then(session => {
+          setActiveJourney(session || null);
+        })
+        .catch(err => console.warn('Could not restore journey session:', err));
+    }
+  }, [isFocused, user?.id]);
 
   // Derive distance from office
   const effectiveLocation = simulatedLocationMode || currentLocation;
@@ -62,6 +96,25 @@ export default function AttendanceScreen({ navigation }) {
         setCurrentLocation(coords);
         setIsLocating(false);
         setLocationError(null);
+
+        // If journey is active and location sharing is ON, record breadcrumb
+        if (activeJourneyRef.current && isLocationSharingRef.current && user?.id) {
+          seqNoRef.current += 1;
+          safetyService
+            .logBreadcrumb({
+              sessionId: activeJourneyRef.current.id,
+              studentUserId: user.id,
+              coords,
+              seqNo: seqNoRef.current,
+              accessToken,
+            })
+            .then(() => {
+              setTrackedPointsCount(prev => prev + 1);
+            })
+            .catch(err => {
+              console.warn('Breadcrumb log error:', err.message);
+            });
+        }
       },
       error => {
         setIsLocating(false);
@@ -83,7 +136,7 @@ export default function AttendanceScreen({ navigation }) {
         showsBackgroundLocationIndicator: false,
       }
     );
-  }, []);
+  }, [user?.id, accessToken]);
 
   const handleRequestLocationPermission = useCallback(
     async (isExplicitUserClick = false) => {
@@ -227,7 +280,7 @@ export default function AttendanceScreen({ navigation }) {
         [
           {
             text: 'View History',
-            onPress: () => navigation.navigate('History'),
+            onPress: () => (onNavigateTab ? onNavigateTab('history') : navigation?.navigate('HistoryTab')),
           },
           { text: 'Done', style: 'cancel' },
         ]
@@ -284,6 +337,102 @@ export default function AttendanceScreen({ navigation }) {
     day: 'numeric',
   });
 
+  const campusId =
+    currentMembership?.campus_id ||
+    user?.campusId ||
+    'a68adb66-5482-428e-8702-1b5dd3fc1c67';
+
+  const handleToggleJourney = async () => {
+    if (!user?.id) {
+      Alert.alert('Authentication Required', 'Please sign in to track campus journeys.');
+      return;
+    }
+
+    try {
+      setJourneyLoading(true);
+      if (activeJourney) {
+        // End journey
+        await safetyService.stopJourney({
+          sessionId: activeJourney.id,
+          studentUserId: user.id,
+          accessToken,
+        });
+        setActiveJourney(null);
+        Alert.alert(
+          'Journey Ended',
+          `Safe campus journey ended. Total breadcrumbs tracked: ${trackedPointsCount}`
+        );
+      } else {
+        // Start journey
+        const session = await safetyService.startJourney({
+          campusId,
+          studentUserId: user.id,
+          accessToken,
+        });
+        setActiveJourney(session);
+        seqNoRef.current = 0;
+        setTrackedPointsCount(0);
+        Alert.alert(
+          'Safe Journey Started',
+          'Offline tracking is active. Breadcrumbs will be saved locally in SQLite and synced when online.'
+        );
+      }
+    } catch (err) {
+      Alert.alert('Journey Error', err.message || 'Failed to update journey.');
+    } finally {
+      setJourneyLoading(false);
+    }
+  };
+
+  const handleTriggerSos = () => {
+    Alert.alert(
+      '🚨 TRIGGER EMERGENCY SOS?',
+      'This will immediately broadcast your GPS location to Campus Security and dispatch an emergency alert.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'CONFIRM SOS 🚨',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsSosLoading(true);
+              const result = await safetyService.triggerSos({
+                campusId,
+                studentUserId: user?.id,
+                coords: effectiveLocation,
+                accessToken,
+                sessionId: activeJourney?.id || null,
+              });
+              setIsSosActive(true);
+              Alert.alert(
+                '🚨 SOS ALERT SENT',
+                result.status === 'SERVER_RECEIVED'
+                  ? 'Campus Security has received your emergency alert and coordinates!'
+                  : 'SOS stored in local offline queue. Will sync immediately when connectivity resumes.',
+                [{ text: 'OK' }]
+              );
+            } catch (err) {
+              Alert.alert('SOS Error', 'Failed to dispatch SOS alert: ' + err.message);
+            } finally {
+              setIsSosLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Sign Out',
+      `Are you sure you want to sign out from CampusSafe, ${user?.fullName || 'Student'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign Out', style: 'destructive', onPress: logout },
+      ]
+    );
+  };
+
   return (
     <View style={styles.container}>
       {/* Top Branded App Header */}
@@ -295,16 +444,20 @@ export default function AttendanceScreen({ navigation }) {
             resizeMode="contain"
           />
           <View>
-            <Text style={styles.headerTitle}>Attendance Desk</Text>
-            <Text style={styles.headerSubtitle}>Infosys Campus • 100m Zone</Text>
+            <Text style={styles.headerTitle}>{user?.fullName || 'Attendance Desk'}</Text>
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
+              {user?.email || 'CampusSafe • 100m Zone'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.headerRight}>
-          <View style={styles.livePill}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>GPS LIVE</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.headerLogoutBtn}
+            onPress={handleLogout}
+            activeOpacity={0.8}>
+            <Text style={styles.headerLogoutText}>🚪 Logout</Text>
+          </TouchableOpacity>
           <Text style={styles.dateText}>{todayDateStr}</Text>
         </View>
       </View>
@@ -497,7 +650,7 @@ export default function AttendanceScreen({ navigation }) {
 
           <TouchableOpacity
             style={styles.historyButton}
-            onPress={() => navigation.navigate('History')}
+            onPress={() => (onNavigateTab ? onNavigateTab('history') : navigation?.navigate('HistoryTab'))}
             activeOpacity={0.85}>
             <View style={styles.historyButtonLeft}>
               <Text style={styles.historyButtonIcon}>📋</Text>

@@ -25,29 +25,24 @@ class OpSqliteAdapter {
   }
 
   async transaction(callback) {
-    if (this.isTransaction) {
-      return await callback(this);
-    }
-
     let result;
     await this._db.transaction(async (tx) => {
-      this.isTransaction = true;
-      try {
-        const txAdapter = {
-          execute: async (sql, params = []) => {
-            const res = await tx.execute(sql, params);
-            const rows = res.rows ? (res.rows._array || res.rows) : [];
-            return {
-              rows: Array.isArray(rows) ? rows : [],
-              rowsAffected: res.rowsAffected || 0,
-              insertId: res.insertId,
-            };
-          },
-        };
-        result = await callback(txAdapter);
-      } finally {
-        this.isTransaction = false;
-      }
+      const txAdapter = {
+        execute: async (sql, params = []) => {
+          const res = await tx.execute(sql, params);
+          const rows = res.rows ? (res.rows._array || res.rows) : [];
+          return {
+            rows: Array.isArray(rows) ? rows : [],
+            rowsAffected: res.rowsAffected || 0,
+            insertId: res.insertId,
+          };
+        },
+        transaction: async (nestedCallback) => {
+          // Re-entrant / nested execution inside the active transaction context
+          return await nestedCallback(txAdapter);
+        },
+      };
+      result = await callback(txAdapter);
     });
     return result;
   }

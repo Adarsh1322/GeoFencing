@@ -118,11 +118,40 @@ Authenticates any registered user. **The client does NOT supply a role; the serv
 - **Security Logic:** Hashes the incoming token and checks `refresh_tokens`. If the token was already revoked, a token replay attack is detected: the entire `family_id` is immediately invalidated. If valid, a new access token and rotated refresh token are issued.
 - **Response `200 OK`:** Returns new `access_token` and rotated `refresh_token`.
 
-### 2.5 Logout Endpoints
+### 2.5 Logout Endpoint
 - **Endpoint:** `POST /api/v1/auth/logout`
-  - Revokes the current refresh token.
-- **Endpoint:** `POST /api/v1/auth/logout-all`
-  - Revokes all refresh tokens belonging to the user across all devices.
+  - Revokes the current refresh token family.
+
+### 2.6 Current Authenticated User Profile
+- **Endpoint:** `GET /api/v1/auth/me`
+- **Auth Required:** Yes (`Bearer <ACCESS_TOKEN>`)
+- **Response `200 OK`:**
+```json
+{
+  "user": {
+    "id": "3c5b782f-b49f-4efa-8d1f-91d7a3902b3d",
+    "email": "student@campussafe.edu",
+    "full_name": "Aarav Patel",
+    "phone": "+919123456780",
+    "role": "STUDENT",
+    "created_at": "2026-10-25T10:00:00.000Z"
+  },
+  "memberships": [
+    {
+      "id": "e8d1234a-5b6c-7d8e-9f0a-1b2c3d4e5f6a",
+      "campus_id": "c1a0e8d4-5392-498c-8f2e-e5a91f532a01",
+      "campus_code": "CSEU",
+      "campus_name": "Central State Engineering University",
+      "roll_number": "MCA2026-001",
+      "status": "ACTIVE",
+      "approved_at": "2026-10-25T10:05:00.000Z",
+      "created_at": "2026-10-25T10:00:00.000Z"
+    }
+  ],
+  "assignments": [],
+  "activeSession": null
+}
+```
 
 ---
 
@@ -438,12 +467,48 @@ Immediate trigger. Persists immediately into `sos_requests` and `notification_ou
 ## 8. Administrative Dashboard & Audit Endpoints
 
 ### 8.1 Fetch Active Students on Campus
-- **Endpoint:** `GET /api/v1/dashboard/active-students?campusId=...&limit=50&offset=0`
-- **Auth Required:** Yes (`UNIVERSITY_SAFETY_ADMIN` assigned to `campusId`)
+- **Endpoint:** `GET /api/v1/dashboard/students?campusId=...`
+- **Auth Required:** Yes (`CAMPUS_ADMIN` assigned to `campusId`)
 
-### 8.2 Inspect Access Audit Trail
-- **Endpoint:** `GET /api/v1/audit/logs?targetStudentId=...&campusId=...&limit=100&offset=0`
-- **Auth Required:** Yes (`UNIVERSITY_SAFETY_ADMIN` assigned to campus, or `STUDENT` inspecting self)
+### 8.2 Fetch Pending Student Memberships
+- **Endpoint:** `GET /api/v1/dashboard/students/pending?campusId=...`
+- **Auth Required:** Yes (`CAMPUS_ADMIN` assigned to target campus)
+- **Response `200 OK`:**
+```json
+{
+  "pendingStudents": [
+    {
+      "membership_id": "4b6c...7d8e",
+      "student_user_id": "3c5b...2b3d",
+      "campus_id": "c1a0...2a01",
+      "campus_name": "Central State Engineering University",
+      "campus_code": "CSEU",
+      "roll_number": "MCA2026-002",
+      "status": "PENDING_APPROVAL",
+      "requested_at": "2026-10-25T10:00:00.000Z",
+      "student_name": "Kavita Singh",
+      "student_email": "pending@campussafe.edu",
+      "student_phone": "+919123456781"
+    }
+  ]
+}
+```
+
+### 8.3 Approve Student Membership
+- **Endpoint:** `POST /api/v1/dashboard/students/:membershipId/approve`
+- **Auth Required:** Yes (`CAMPUS_ADMIN` assigned to student's campus)
+- **Response `200 OK`:** Atomically sets status to `ACTIVE`, populates `approved_by` and `approved_at`.
+
+### 8.4 Reject Student Membership
+- **Endpoint:** `POST /api/v1/dashboard/students/:membershipId/reject`
+- **Auth Required:** Yes (`CAMPUS_ADMIN` assigned to student's campus)
+- **Request Body (Optional):**
+```json
+{
+  "reason": "Invalid roll number or enrollment unverified"
+}
+```
+- **Response `200 OK`:** Sets status to `REJECTED`.
 
 ---
 

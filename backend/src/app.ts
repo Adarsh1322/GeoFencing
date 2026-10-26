@@ -10,9 +10,12 @@ import {
 } from './controllers/authController.js';
 import { getCampusById, listCampuses } from './controllers/campusController.js';
 import {
+  approveStudentMembership,
   getDashboardIncidents,
   getDashboardStudents,
+  getPendingStudents,
   getStudentHistory,
+  rejectStudentMembership,
 } from './controllers/dashboardController.js';
 import {
   acceptInvitation,
@@ -121,6 +124,24 @@ export function createApp(): Express {
 
   // 6. Safety Dashboard routes (Campus Admins)
   const dashboardRouter = express.Router();
+  dashboardRouter.get(
+    '/students/pending',
+    authenticateToken,
+    requireRole('CAMPUS_ADMIN'),
+    getPendingStudents
+  );
+  dashboardRouter.post(
+    '/students/:membershipId/approve',
+    authenticateToken,
+    requireRole('CAMPUS_ADMIN'),
+    approveStudentMembership
+  );
+  dashboardRouter.post(
+    '/students/:membershipId/reject',
+    authenticateToken,
+    requireRole('CAMPUS_ADMIN'),
+    rejectStudentMembership
+  );
   dashboardRouter.get(
     '/students',
     authenticateToken,

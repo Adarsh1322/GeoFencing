@@ -15,6 +15,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
   let db;
   const sessionA = 'session_alpha_001';
   const sessionB = 'session_beta_002';
+  const studentUser = 'student_test_user_001';
 
   beforeEach(async () => {
     db = await createTestDatabase({ inMemory: true });
@@ -25,6 +26,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
       id: sessionA,
       campus_id: 'campus_1',
       device_id: 'device_1',
+      student_user_id: studentUser,
       started_at: '2026-10-25T08:00:00.000Z',
       scheduled_end_at: '2026-10-25T12:00:00.000Z',
     });
@@ -33,6 +35,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
       id: sessionB,
       campus_id: 'campus_1',
       device_id: 'device_1',
+      student_user_id: studentUser,
       started_at: '2026-10-25T12:05:00.000Z',
       scheduled_end_at: '2026-10-25T16:00:00.000Z',
     });
@@ -75,7 +78,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
     expect(statusBefore.pending).toBe(10);
 
     // Claim next batch with size 50 (larger than total pending)
-    const claimed = await claimNextBatch(db, 50, 'batch_test_001');
+    const claimed = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 50, batchId: 'batch_test_001' });
 
     // 1. Target session must be returned alongside points
     expect(claimed.sessionId).toBe(sessionA);
@@ -95,7 +98,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
     expect(sessionBStatus.syncing).toBe(0);
 
     // 4. Next claim will NOT pick up Session A (since its points are now SYNCING), it picks Session B
-    const secondClaim = await claimNextBatch(db, 50, 'batch_test_002');
+    const secondClaim = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 50, batchId: 'batch_test_002' });
     expect(secondClaim.sessionId).toBe(sessionB);
     expect(secondClaim.points.length).toBe(5);
     for (const pt of secondClaim.points) {
@@ -114,7 +117,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
     });
 
     // Claim batch (transitions to SYNCING)
-    await claimNextBatch(db, 10, 'batch_crash_sim');
+    await claimNextBatch(db, { studentUserId: studentUser, batchSize: 10, batchId: 'batch_crash_sim' });
 
     let status = await getQueueStatus(db, sessionA);
     expect(status.syncing).toBe(1);
@@ -158,7 +161,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
       });
     }
 
-    const batch = await claimNextBatch(db, 10, 'batch_ack_test');
+    const batch = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 10, batchId: 'batch_ack_test' });
     expect(batch.points.length).toBe(4);
 
     // Simulate server response:
@@ -217,7 +220,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
       });
     }
 
-    const batch = await claimNextBatch(db, 10, 'batch_partial_test');
+    const batch = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 10, batchId: 'batch_partial_test' });
     expect(batch.points.length).toBe(3);
 
     // Server only responds for point 1, omitting points 2 and 3 (partial response / network truncation)
@@ -291,7 +294,7 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
       captured_at: '2026-10-25T08:01:00.000Z',
     });
 
-    const batch = await claimNextBatch(db, 10, 'batch_rollback_test');
+    const batch = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 10, batchId: 'batch_rollback_test' });
 
     // Force failure by injecting a malformed operation into handleBatchAcknowledgement
     const originalExecute = db.execute.bind(db);
@@ -344,8 +347,8 @@ describe('Location Queue Repository & Session Isolation (TC-06, TC-07, TC-08, TC
     });
 
     // Claim both batches
-    const batchA = await claimNextBatch(db, 10, 'batch_A');
-    const batchB = await claimNextBatch(db, 10, 'batch_B');
+    const batchA = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 10, batchId: 'batch_A' });
+    const batchB = await claimNextBatch(db, { studentUserId: studentUser, batchSize: 10, batchId: 'batch_B' });
 
     expect(batchA.sessionId).toBe(sessionA);
     expect(batchB.sessionId).toBe(sessionB);

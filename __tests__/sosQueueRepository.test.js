@@ -29,6 +29,7 @@ describe('SOS Queue Repository & Pruning Immunity (TC-10, TC-11)', () => {
       id: testSessionId,
       campus_id: 'campus_1',
       device_id: 'device_1',
+      student_user_id: 'student_sos_001',
       scheduled_end_at: '2026-10-25T18:00:00.000Z',
     });
   });
@@ -112,27 +113,29 @@ describe('SOS Queue Repository & Pruning Immunity (TC-10, TC-11)', () => {
   });
 
   test('SOS Lifecycle Status Transitions: PENDING -> SYNCING -> SERVER_RECEIVED -> SERVER_ACKNOWLEDGED -> RESOLVED', async () => {
+    const studentId = 'student_sos_001';
     const sosKey = 'sos_lifecycle_test_key';
     await enqueueSos(db, {
       idempotency_key: sosKey,
       campus_id: 'campus_1',
+      student_user_id: studentId,
       triggered_at: '2026-10-25T11:30:00.000Z',
     });
 
     // 1. Initial State: PENDING
-    let pendingList = await getPendingSos(db);
+    let pendingList = await getPendingSos(db, studentId);
     expect(pendingList.length).toBe(1);
     expect(pendingList[0].status).toBe('PENDING');
 
     // 2. When in flight: SYNCING
     const syncingRecord = await markSosSyncing(db, sosKey);
     expect(syncingRecord.status).toBe('SYNCING');
-    expect((await getPendingSos(db)).length).toBe(0);
+    expect((await getPendingSos(db, studentId)).length).toBe(0);
 
     // 3. Stale recovery resets SYNCING to PENDING if interrupted
     const recoveredCount = await recoverStaleSosSyncing(db);
     expect(recoveredCount).toBe(1);
-    expect((await getPendingSos(db)).length).toBe(1);
+    expect((await getPendingSos(db, studentId)).length).toBe(1);
 
     // Re-mark syncing
     await markSosSyncing(db, sosKey);

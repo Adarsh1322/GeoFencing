@@ -116,6 +116,86 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 2,
+    name: 'identity_isolation_and_quarantine',
+    up: async (db) => {
+      // 1. Add student_user_id to local_sessions
+      await db.execute('ALTER TABLE local_sessions ADD COLUMN student_user_id TEXT;');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_local_sessions_student_status ON local_sessions (student_user_id, status);'
+      );
+
+      // 2. Add student_user_id and is_quarantined to location_queue
+      await db.execute('ALTER TABLE location_queue ADD COLUMN student_user_id TEXT;');
+      await db.execute(
+        'ALTER TABLE location_queue ADD COLUMN is_quarantined INTEGER NOT NULL DEFAULT 0;'
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_location_queue_student_status_seq ON location_queue (student_user_id, status, seq_no ASC);'
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_location_queue_quarantine ON location_queue (is_quarantined);'
+      );
+
+      // 3. Add student_user_id to rejected_points_log
+      await db.execute('ALTER TABLE rejected_points_log ADD COLUMN student_user_id TEXT;');
+
+      // 4. Add student_user_id and is_quarantined to sos_queue
+      await db.execute('ALTER TABLE sos_queue ADD COLUMN student_user_id TEXT;');
+      await db.execute(
+        'ALTER TABLE sos_queue ADD COLUMN is_quarantined INTEGER NOT NULL DEFAULT 0;'
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sos_queue_student_status ON sos_queue (student_user_id, status);'
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sos_queue_quarantine ON sos_queue (is_quarantined);'
+      );
+
+      // 5. Add student_user_id to telemetry_gaps
+      await db.execute('ALTER TABLE telemetry_gaps ADD COLUMN student_user_id TEXT;');
+
+      // 6. Data Migration: Backfill student_user_id from local_sessions where possible
+      await db.execute(`
+        UPDATE location_queue
+        SET student_user_id = (
+          SELECT student_user_id FROM local_sessions
+          WHERE local_sessions.id = location_queue.session_id
+        )
+        WHERE (student_user_id IS NULL OR student_user_id = '')
+          AND session_id IN (
+            SELECT id FROM local_sessions WHERE student_user_id IS NOT NULL AND student_user_id != ''
+          );
+      `);
+
+      await db.execute(`
+        UPDATE sos_queue
+        SET student_user_id = (
+          SELECT student_user_id FROM local_sessions
+          WHERE local_sessions.id = sos_queue.session_id
+        )
+        WHERE (student_user_id IS NULL OR student_user_id = '')
+          AND session_id IN (
+            SELECT id FROM local_sessions WHERE student_user_id IS NOT NULL AND student_user_id != ''
+          );
+      `);
+
+      // 7. Quarantine unowned legacy records whose student owner cannot be established
+      // (Ensures they are preserved in SQLite but never submitted under another student's session/credentials)
+      await db.execute(`
+        UPDATE location_queue
+        SET is_quarantined = 1
+        WHERE student_user_id IS NULL OR student_user_id = '';
+      `);
+
+      await db.execute(`
+        UPDATE sos_queue
+        SET is_quarantined = 1
+        WHERE student_user_id IS NULL OR student_user_id = '';
+      `);
+    },
+  },
 ];
 
 /**

@@ -1,15 +1,19 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import AttendanceScreen from '../screens/AttendanceScreen';
-import HistoryScreen from '../screens/HistoryScreen';
+import { useAuth } from '../context/AuthContext';
+import StudentTabsScreen from '../screens/StudentTabsScreen';
+import LoginScreen from '../screens/LoginScreen';
+import RegisterScreen from '../screens/RegisterScreen';
+import PendingApprovalScreen from '../screens/PendingApprovalScreen';
 import { COLORS } from '../constants/colors';
 
 const Stack = createNativeStackNavigator();
 
 export default function AppNavigator() {
+  const { user, isApproved } = useAuth();
+
   return (
     <Stack.Navigator
-      initialRouteName="Attendance"
       screenOptions={{
         headerStyle: {
           backgroundColor: COLORS.surface,
@@ -24,21 +28,35 @@ export default function AppNavigator() {
           backgroundColor: COLORS.background,
         },
       }}>
-      <Stack.Screen
-        name="Attendance"
-        component={AttendanceScreen}
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="History"
-        component={HistoryScreen}
-        options={{
-          title: 'Attendance Records',
-          headerBackTitle: 'Desk',
-        }}
-      />
+      {!user ? (
+        // Unauthenticated Stack
+        <>
+          <Stack.Screen
+            name="Login"
+            component={LoginScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Register"
+            component={RegisterScreen}
+            options={{ headerShown: false }}
+          />
+        </>
+      ) : !isApproved ? (
+        // Pending Admin Approval
+        <Stack.Screen
+          name="PendingApproval"
+          component={PendingApprovalScreen}
+          options={{ headerShown: false }}
+        />
+      ) : (
+        // Authenticated Student App with Bottom Navigation Bar
+        <Stack.Screen
+          name="StudentApp"
+          component={StudentTabsScreen}
+          options={{ headerShown: false }}
+        />
+      )}
     </Stack.Navigator>
   );
 }

@@ -8,12 +8,15 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
 import { getAttendanceRecords, clearAttendanceRecords } from '../storage/attendanceStorage';
 import AttendanceItem from '../components/AttendanceItem';
 import styles from '../styles/historyScreen.styles';
 
-export default function HistoryScreen() {
+export default function HistoryScreen({ isFocused = true }) {
+  const insets = useSafeAreaInsets();
   const [records, setRecords] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -32,9 +35,19 @@ export default function HistoryScreen() {
     }
   }, []);
 
+  // Standard React Navigation focus listener
+  useFocusEffect(
+    useCallback(() => {
+      loadHistory();
+    }, [loadHistory])
+  );
+
+  // Tab switch listener: immediately re-fetch records when user selects Records tab
   useEffect(() => {
-    loadHistory();
-  }, [loadHistory]);
+    if (isFocused) {
+      loadHistory();
+    }
+  }, [isFocused, loadHistory]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -77,7 +90,28 @@ export default function HistoryScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Top Header Bar */}
+      {/* Top App Header */}
+      <View
+        style={{
+          paddingTop: Math.max(insets.top, 12),
+          paddingHorizontal: 16,
+          paddingBottom: 14,
+          backgroundColor: '#FFFFFF',
+          borderBottomWidth: 1,
+          borderBottomColor: '#E2E8F0',
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+        <Text style={{ fontSize: 18, fontWeight: '800', color: '#0F172A' }}>
+          📋 Attendance Records
+        </Text>
+        <Text style={{ fontSize: 12, fontWeight: '600', color: '#64748B' }}>
+          Offline SQLite
+        </Text>
+      </View>
+
+      {/* Stats Summary Bar */}
       {records.length > 0 && (
         <View style={styles.headerBar}>
           <View style={styles.headerTitleGroup}>

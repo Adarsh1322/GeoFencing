@@ -19,12 +19,13 @@ async function createSession(db, session) {
   return await db.transaction(async (tx) => {
     await tx.execute(
       `INSERT INTO local_sessions (
-        id, campus_id, device_id, status, started_at, scheduled_end_at, ended_at, last_seq_no
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0);`,
+        id, campus_id, device_id, student_user_id, status, started_at, scheduled_end_at, ended_at, last_seq_no
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);`,
       [
         session.id,
         session.campus_id,
         session.device_id,
+        session.student_user_id || null,
         status,
         startedAt,
         scheduledEndAt,
@@ -42,11 +43,28 @@ async function getSessionById(db, sessionId) {
   return res.rows && res.rows.length > 0 ? res.rows[0] : null;
 }
 
-async function getActiveSession(db) {
+async function getActiveSession(db, studentUserId = null) {
+  if (studentUserId) {
+    const res = await db.execute(
+      "SELECT * FROM local_sessions WHERE status = 'ACTIVE' AND student_user_id = ? ORDER BY started_at DESC LIMIT 1;",
+      [studentUserId]
+    );
+    return res.rows && res.rows.length > 0 ? res.rows[0] : null;
+  }
+  // Fail-closed against cross-tenant leaks: When studentUserId is not provided,
+  // never leak a named student's active session. Only match legacy unowned sessions.
   const res = await db.execute(
-    "SELECT * FROM local_sessions WHERE status = 'ACTIVE' ORDER BY started_at DESC LIMIT 1;"
+    "SELECT * FROM local_sessions WHERE status = 'ACTIVE' AND (student_user_id IS NULL OR student_user_id = '') ORDER BY started_at DESC LIMIT 1;"
   );
   return res.rows && res.rows.length > 0 ? res.rows[0] : null;
+}
+
+async function getSessionsByStudent(db, studentUserId) {
+  const res = await db.execute(
+    'SELECT * FROM local_sessions WHERE student_user_id = ? ORDER BY started_at DESC;',
+    [studentUserId]
+  );
+  return res.rows || [];
 }
 
 async function updateSessionStatus(db, sessionId, status, endedAt = null) {
@@ -93,6 +111,7 @@ module.exports = {
   createSession,
   getSessionById,
   getActiveSession,
+  getSessionsByStudent,
   updateSessionStatus,
   allocateNextSeqNo,
   deleteSession,
