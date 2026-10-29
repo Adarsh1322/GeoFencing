@@ -20,9 +20,22 @@ const createSosSchema = z.object({
   triggerType: z.string().optional(),
 });
 
-const resolveSosSchema = z.object({
-  notes: z.string().min(5),
-});
+const resolveSosSchema = z
+  .object({
+    notes: z.string().min(5).optional(),
+    resolutionNotes: z.string().min(5).optional(),
+    campusId: z.string().uuid().optional(),
+    status: z.string().optional(),
+  })
+  .refine(
+    (data) =>
+      (data.notes !== undefined && data.notes.trim().length >= 5) ||
+      (data.resolutionNotes !== undefined && data.resolutionNotes.trim().length >= 5),
+    {
+      message: 'Resolution notes required (minimum 5 characters)',
+      path: ['notes'],
+    }
+  );
 
 export async function handleCreateSos(
   req: Request,
@@ -150,7 +163,8 @@ export async function handleResolveSos(
       return;
     }
 
-    const updatedSos = await resolveSos(id, adminUserId, campusId, body.notes);
+    const resolutionNotes = (body.notes || body.resolutionNotes)!.trim();
+    const updatedSos = await resolveSos(id, adminUserId, campusId, resolutionNotes);
 
     emitSosEvent(updatedSos.campus_id, updatedSos.student_user_id, 'sos_resolved', {
       sosId: updatedSos.id,

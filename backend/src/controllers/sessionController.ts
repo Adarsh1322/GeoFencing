@@ -7,6 +7,7 @@ import {
 } from '../services/sessionService.js';
 
 const startSessionSchema = z.object({
+  sessionId: z.string().uuid().optional(),
   campusId: z.string().uuid(),
   deviceId: z.string().min(2),
   durationMinutes: z.number().int().min(15).max(720).optional(),
@@ -21,7 +22,8 @@ export async function startSession(req: Request, res: Response, next: NextFuncti
       studentUserId,
       body.campusId,
       body.deviceId,
-      body.durationMinutes || 120
+      body.durationMinutes || 120,
+      body.sessionId
     );
 
     res.status(201).json({

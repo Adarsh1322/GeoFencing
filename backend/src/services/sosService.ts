@@ -243,9 +243,11 @@ export async function resolveSos(
 
 export async function getActiveIncidents(campusId: string): Promise<SosRequest[]> {
   const res = await query<SosRequest>(
-    `SELECT * FROM sos_requests
-     WHERE campus_id = $1 AND status IN ('RECEIVED', 'ACKNOWLEDGED')
-     ORDER BY received_at DESC;`,
+    `SELECT sr.*, u.full_name as student_name, u.phone as student_phone
+     FROM sos_requests sr
+     JOIN users u ON sr.student_user_id = u.id
+     WHERE sr.campus_id = $1 AND sr.status IN ('RECEIVED', 'ACKNOWLEDGED')
+     ORDER BY sr.received_at DESC;`,
     [campusId]
   );
   return res.rows;

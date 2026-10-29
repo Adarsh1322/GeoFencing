@@ -52,13 +52,14 @@ export const safetyService = {
 
     // 2. Notify backend if online
     if (accessToken) {
-      fetch(`${API_BASE_URL}/sessions`, {
+      fetch(`${API_BASE_URL}/sessions/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
+          sessionId,
           campusId,
           deviceId,
           durationMinutes: 120,
@@ -83,9 +84,10 @@ export const safetyService = {
 
     // 2. Notify backend if online
     if (accessToken && sessionId) {
-      fetch(`${API_BASE_URL}/sessions/${sessionId}`, {
-        method: 'DELETE',
+      fetch(`${API_BASE_URL}/sessions/${sessionId}/stop`, {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
       }).catch(err => {
@@ -147,7 +149,7 @@ export const safetyService = {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/sessions/${batch.sessionId}/sync`, {
+      const response = await fetch(`${API_BASE_URL}/sessions/${batch.sessionId}/locations/batch`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -166,16 +168,30 @@ export const safetyService = {
       });
 
       if (!response.ok) {
-        // Recover batch back to PENDING on failure
+        // Recover batch back to PENDING on failure (never delete unconfirmed records)
         await handleBatchAcknowledgement(db, batch.batchId, []);
         return { syncedCount: 0 };
       }
 
-      const syncResult = await response.json();
-      await handleBatchAcknowledgement(db, batch.batchId, syncResult.results || []);
+      let syncResult;
+      try {
+        syncResult = await response.json();
+      } catch {
+        // Malformed server response - safely restore points to PENDING
+        await handleBatchAcknowledgement(db, batch.batchId, []);
+        return { syncedCount: 0 };
+      }
+
+      if (!syncResult || !Array.isArray(syncResult.results)) {
+        // Ambiguous server outcome - safely restore points to PENDING
+        await handleBatchAcknowledgement(db, batch.batchId, []);
+        return { syncedCount: 0 };
+      }
+
+      await handleBatchAcknowledgement(db, batch.batchId, syncResult.results);
       return { syncedCount: syncResult.accepted_count || 0 };
     } catch (err) {
-      // Network drop: restore points to PENDING
+      // Network drop, timeout, or abort: restore points safely to PENDING
       await handleBatchAcknowledgement(db, batch.batchId, []);
       return { syncedCount: 0 };
     }

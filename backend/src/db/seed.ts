@@ -33,7 +33,7 @@ export async function seedDatabase(): Promise<void> {
        VALUES ($1, $2, $3, $4, $5, $6, $7, true, 1)
        ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, boundary_geojson = EXCLUDED.boundary_geojson, center_lat = EXCLUDED.center_lat, center_lon = EXCLUDED.center_lon
        RETURNING id, code;`,
-      ['Lovely Professional University', 'LPU', JSON.stringify(lpuBoundary), 31.2536, 75.7037, 1200, 'Asia/Kolkata']
+      ['Lovely Professional University', 'CSEU', JSON.stringify(lpuBoundary), 31.2536, 75.7037, 1200, 'Asia/Kolkata']
     );
     const cseuId = cseuRes.rows[0].id;
 

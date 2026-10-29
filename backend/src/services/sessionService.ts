@@ -6,7 +6,8 @@ export async function startSafetySession(
   studentUserId: string,
   campusId: string,
   deviceId: string,
-  requestedDurationMinutes = 120
+  requestedDurationMinutes = 120,
+  sessionId?: string
 ): Promise<SafetySession> {
   // 1. Verify student membership
   const memberRes = await query<StudentCampusMembership>(
@@ -31,6 +32,10 @@ export async function startSafetySession(
   );
 
   if (activeRes.rowCount && activeRes.rowCount > 0) {
+    // If client is re-registering the same active session, return it idempotently
+    if (sessionId && activeRes.rows[0].id === sessionId) {
+      return activeRes.rows[0];
+    }
     throw new Error('ACTIVE_SESSION_EXISTS');
   }
 
@@ -41,12 +46,22 @@ export async function startSafetySession(
   }
 
   // 4. Create session
-  const insertRes = await query<SafetySession>(
-    `INSERT INTO safety_sessions (student_user_id, campus_id, device_id, status, started_at, scheduled_end_at)
-     VALUES ($1, $2, $3, 'ACTIVE', now(), $4)
-     RETURNING *;`,
-    [studentUserId, campusId, deviceId, scheduleCheck.scheduledEndTime]
-  );
+  let insertRes;
+  if (sessionId) {
+    insertRes = await query<SafetySession>(
+      `INSERT INTO safety_sessions (id, student_user_id, campus_id, device_id, status, started_at, scheduled_end_at)
+       VALUES ($1, $2, $3, $4, 'ACTIVE', now(), $5)
+       RETURNING *;`,
+      [sessionId, studentUserId, campusId, deviceId, scheduleCheck.scheduledEndTime]
+    );
+  } else {
+    insertRes = await query<SafetySession>(
+      `INSERT INTO safety_sessions (student_user_id, campus_id, device_id, status, started_at, scheduled_end_at)
+       VALUES ($1, $2, $3, 'ACTIVE', now(), $4)
+       RETURNING *;`,
+      [studentUserId, campusId, deviceId, scheduleCheck.scheduledEndTime]
+    );
+  }
 
   return insertRes.rows[0];
 }

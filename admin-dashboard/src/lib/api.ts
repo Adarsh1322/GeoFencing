@@ -124,22 +124,27 @@ export const api = {
   },
 
   // Emergency SOS
-  getActiveSos: async (): Promise<{ activeSos: SosIncident[] }> => {
-    return apiFetch<{ activeSos: SosIncident[] }>('/sos/active');
+  getActiveSos: async (campusId?: string): Promise<{ incidents: SosIncident[] }> => {
+    const query = campusId ? `?campusId=${encodeURIComponent(campusId)}` : '';
+    return apiFetch<{ incidents: SosIncident[] }>(`/sos/active${query}`);
   },
 
-  acknowledgeSos: async (sosId: string): Promise<{ sos: SosIncident }> => {
+  acknowledgeSos: async (sosId: string, campusId?: string): Promise<{ sos: SosIncident }> => {
     return apiFetch<{ sos: SosIncident }>(`/sos/${sosId}/acknowledge`, {
       method: 'POST',
+      body: JSON.stringify({ campusId }),
     });
   },
 
-  resolveSos: async (sosId: string, notes?: string): Promise<{ sos: SosIncident }> => {
+  resolveSos: async (sosId: string, notes: string, campusId?: string): Promise<{ sos: SosIncident }> => {
+    const trimmedNotes = (notes && notes.trim().length >= 5)
+      ? notes.trim()
+      : 'Officer verified student safety on site. Incident resolved.';
     return apiFetch<{ sos: SosIncident }>(`/sos/${sosId}/resolve`, {
       method: 'POST',
       body: JSON.stringify({
-        status: 'RESOLVED',
-        resolutionNotes: notes || 'Officer verified student safety on site. Incident resolved.',
+        notes: trimmedNotes,
+        campusId,
       }),
     });
   },

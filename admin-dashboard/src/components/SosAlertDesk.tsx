@@ -48,9 +48,18 @@ export default function SosAlertDesk({
 
   const handleResolveSubmit = async () => {
     if (!resolutionModalIncident) return;
+    const trimmedNotes = resolutionNotes.trim();
+    if (trimmedNotes.length < 5) {
+      alert('Official incident resolution requires descriptive notes of at least 5 characters.');
+      return;
+    }
     setProcessingId(resolutionModalIncident.id);
     try {
-      await api.resolveSos(resolutionModalIncident.id, resolutionNotes);
+      await api.resolveSos(
+        resolutionModalIncident.id,
+        trimmedNotes,
+        resolutionModalIncident.campus_id
+      );
       setResolutionModalIncident(null);
       setResolutionNotes('');
       emergencyAudio.stopEmergencySiren();

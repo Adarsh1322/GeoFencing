@@ -24,6 +24,7 @@ export default function AdminDashboardPage() {
   const [pendingStudents, setPendingStudents] = useState<PendingStudent[]>([]);
   const [activeSos, setActiveSos] = useState<SosIncident[]>([]);
   const [historicalSos, setHistoricalSos] = useState<SosIncident[]>([]);
+  const [sosError, setSosError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [takeoverIncident, setTakeoverIncident] = useState<SosIncident | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
@@ -46,8 +47,8 @@ export default function AdminDashboardPage() {
       const list = res.campuses || [];
       setCampuses(list);
       if (list.length > 0 && !selectedCampusId) {
-        // Prioritize Lovely Professional University (LPU)
-        const lpu = list.find((c) => c.code === 'LPU');
+        // Prioritize Lovely Professional University (LPU / CSEU)
+        const lpu = list.find((c) => c.code === 'LPU' || c.code === 'CSEU' || c.name.toLowerCase().includes('lovely'));
         setSelectedCampusId(lpu ? lpu.id : list[0].id);
       }
     }).catch((err) => {
@@ -63,17 +64,30 @@ export default function AdminDashboardPage() {
       const [studentsRes, pendingRes, sosRes, incidentsRes] = await Promise.all([
         api.getDashboardStudents(selectedCampusId).catch(() => ({ students: [] })),
         api.getPendingStudents(selectedCampusId).catch(() => ({ pendingStudents: [] })),
-        api.getActiveSos().catch(() => ({ activeSos: [] })),
+        api.getActiveSos(selectedCampusId)
+          .then((res) => {
+            setSosError(null);
+            return res;
+          })
+          .catch((err) => {
+            const msg = (err as Error).message || 'Unable to connect to SOS dispatch service';
+            setSosError(msg);
+            return null;
+          }),
         api.getDashboardIncidents(selectedCampusId).catch(() => ({ sosIncidents: [] })),
       ]);
 
       setStudents(studentsRes.students || []);
       setPendingStudents(pendingRes.pendingStudents || []);
 
-      const activeList = (sosRes.activeSos || []).filter(
-        (s) => s.campus_id === selectedCampusId && (s.status === 'PENDING' || s.status === 'ACKNOWLEDGED')
-      );
-      setActiveSos(activeList);
+      if (sosRes && Array.isArray(sosRes.incidents)) {
+        const activeList = sosRes.incidents.filter(
+          (s) =>
+            s.campus_id === selectedCampusId &&
+            (s.status === 'RECEIVED' || s.status === 'ACKNOWLEDGED')
+        );
+        setActiveSos(activeList);
+      }
 
       const pastList = (incidentsRes.sosIncidents || []).filter(
         (s) => s.campus_id === selectedCampusId
@@ -87,8 +101,10 @@ export default function AdminDashboardPage() {
   // Trigger refresh on campus change & set up interval
   useEffect(() => {
     if (!admin || !selectedCampusId) return;
-    refreshData();
-    const interval = setInterval(refreshData, 10000);
+    void refreshData();
+    const interval = setInterval(() => {
+      void refreshData();
+    }, 10000);
     return () => clearInterval(interval);
   }, [admin, selectedCampusId, refreshData]);
 
@@ -233,6 +249,24 @@ export default function AdminDashboardPage() {
             onSelectTab={setActiveTab}
           />
 
+          {/* Emergency SOS Communication Error Banner */}
+          {sosError && (
+            <div className="flex items-center justify-between p-3.5 sm:p-4 rounded-2xl bg-red-500/15 border border-red-500/40 text-red-300 shadow-md">
+              <div className="flex items-center gap-2.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-ping" />
+                <span className="text-xs font-bold">
+                  Emergency Dispatch Notice: {sosError}. Live incident feed may be degraded.
+                </span>
+              </div>
+              <button
+                onClick={refreshData}
+                className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition cursor-pointer"
+              >
+                Retry Dispatch Sync
+              </button>
+            </div>
+          )}
+
           {/* Pending Verification Notice Banner */}
           {pendingStudents.length > 0 && (
             <div className="flex items-center justify-between p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 shadow-md">
@@ -314,7 +348,11 @@ export default function AdminDashboardPage() {
           refreshData();
         }}
         onResolve={async (id) => {
-          await api.resolveSos(id);
+          await api.resolveSos(
+            id,
+            'Officer dispatched and resolved incident via emergency takeover console. Student confirmed safe.',
+            selectedCampusId
+          );
           setTakeoverIncident(null);
           refreshData();
         }}

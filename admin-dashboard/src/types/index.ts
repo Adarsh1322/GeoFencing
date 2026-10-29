@@ -70,7 +70,7 @@ export interface SosIncident {
   longitude: number | null;
   accuracy_meters: number | null;
   trigger_type: string;
-  status: 'PENDING' | 'ACKNOWLEDGED' | 'RESOLVED' | 'FALSE_ALARM';
+  status: 'LOCAL_PENDING' | 'RECEIVED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'FALSE_ALARM';
   triggered_at: string;
   received_at: string;
   acknowledged_at: string | null;
