@@ -7,9 +7,16 @@
  */
 
 import { initDatabase, getDatabase } from '../storage/db';
-import { createSession, updateSessionStatus, getActiveSession } from '../storage/sessionRepository';
+import {
+  createSession,
+  updateSessionStatus,
+  getActiveSession,
+  getSessionsNeedingStopSync,
+  markSessionStopSynced,
+} from '../storage/sessionRepository';
 import { enqueueLocationPoint, claimNextBatch, handleBatchAcknowledgement } from '../storage/locationQueueRepository';
 import { enqueueSos, markSosServerReceived, markSosSyncing, getPendingSos } from '../storage/sosQueueRepository';
+import { trackingService } from './trackingService';
 
 const API_BASE_URL = 'http://localhost:4000/api/v1';
 
@@ -34,6 +41,10 @@ export const safetyService = {
    * Starts a new Safe Campus Journey.
    */
   async startJourney({ campusId, studentUserId, accessToken, deviceId = 'mobile_device' }) {
+    if (!studentUserId) {
+      throw new Error('studentUserId is required to start a Safe Campus Journey');
+    }
+
     const db = await getOrInitDb();
     const sessionId = generateUuid();
     const startedAt = new Date().toISOString();
@@ -50,7 +61,20 @@ export const safetyService = {
       status: 'ACTIVE',
     });
 
-    // 2. Notify backend if online
+    // 2. Start native foreground tracking service on Android
+    try {
+      await trackingService.startTracking({
+        sessionId,
+        studentUserId,
+        campusId,
+      });
+    } catch (err) {
+      // P0-3 Fail closed: Native startup failed. Reconcile partially created local state immediately.
+      await updateSessionStatus(db, sessionId, 'ENDED', new Date().toISOString(), 0);
+      throw new Error(`Failed to start native tracking service: ${err.message || 'Service startup failed'}`);
+    }
+
+    // 3. Notify backend if online
     if (accessToken) {
       fetch(`${API_BASE_URL}/sessions/start`, {
         method: 'POST',
@@ -79,23 +103,67 @@ export const safetyService = {
     const db = await getOrInitDb();
     const endedAt = new Date().toISOString();
 
-    // 1. Update SQLite session to ENDED
-    const updated = await updateSessionStatus(db, sessionId, 'ENDED', endedAt);
+    // 1. Stop native foreground tracking service on Android
+    try {
+      await trackingService.stopTracking(sessionId);
+    } catch (err) {
+      console.warn('Native tracking service stop warning:', err.message);
+    }
 
-    // 2. Notify backend if online
+    // 2. Update SQLite session to ENDED with needs_stop_sync = 1
+    const updated = await updateSessionStatus(db, sessionId, 'ENDED', endedAt, 1);
+
+    // 3. Notify backend if online
     if (accessToken && sessionId) {
-      fetch(`${API_BASE_URL}/sessions/${sessionId}/stop`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }).catch(err => {
-        console.warn('Backend session stop skipped or offline:', err.message);
-      });
+      try {
+        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/stop`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        if (response.ok || response.status === 404 || response.status === 400) {
+          await markSessionStopSynced(db, sessionId);
+        }
+      } catch (err) {
+        console.warn('Backend session stop offline, preserved for retry:', err.message);
+      }
     }
 
     return updated;
+  },
+
+  /**
+   * Reconciles any sessions ended locally (e.g. from notification Stop action or while offline)
+   * with the backend server via authenticated POST /sessions/:id/stop.
+   */
+  async reconcilePendingSessionStops({ studentUserId, accessToken }) {
+    if (!accessToken || !studentUserId) return { reconciledCount: 0 };
+    const db = await getOrInitDb();
+    const pendingSessions = await getSessionsNeedingStopSync(db, studentUserId);
+    let reconciledCount = 0;
+
+    for (const session of pendingSessions) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/sessions/${session.id}/stop`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        if (response.ok || response.status === 404 || response.status === 400) {
+          await markSessionStopSynced(db, session.id);
+          reconciledCount++;
+        }
+      } catch (err) {
+        console.warn('Reconcile stop offline:', err.message);
+        break;
+      }
+    }
+
+    return { reconciledCount };
   },
 
   /**
@@ -103,7 +171,19 @@ export const safetyService = {
    */
   async getActiveJourney(studentUserId) {
     const db = await getOrInitDb();
-    return await getActiveSession(db, studentUserId);
+    const session = await getActiveSession(db, studentUserId);
+    if (!session) return null;
+
+    // Auto-expire if scheduled_end_at has elapsed (aligns with backend session expiry)
+    if (session.scheduled_end_at && new Date(session.scheduled_end_at).getTime() <= Date.now()) {
+      await updateSessionStatus(db, session.id, 'EXPIRED', session.scheduled_end_at);
+      try {
+        await trackingService.stopTracking(session.id);
+      } catch {}
+      return null;
+    }
+
+    return session;
   },
 
   /**
@@ -138,6 +218,10 @@ export const safetyService = {
    * Claims and syncs pending location points with the backend.
    */
   async syncPendingPoints({ sessionId, studentUserId, accessToken }) {
+    if (studentUserId && accessToken) {
+      this.reconcilePendingSessionStops({ studentUserId, accessToken }).catch(() => {});
+    }
+
     const db = await getOrInitDb();
     const batch = await claimNextBatch(db, {
       studentUserId,

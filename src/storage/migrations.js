@@ -196,6 +196,16 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 3,
+    name: 'session_stop_reconciliation',
+    up: async (db) => {
+      await db.execute('ALTER TABLE local_sessions ADD COLUMN needs_stop_sync INTEGER NOT NULL DEFAULT 0;');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_local_sessions_stop_sync ON local_sessions (student_user_id, status, needs_stop_sync);'
+      );
+    },
+  },
 ];
 
 /**

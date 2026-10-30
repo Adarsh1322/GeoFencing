@@ -19,8 +19,8 @@ async function createSession(db, session) {
   return await db.transaction(async (tx) => {
     await tx.execute(
       `INSERT INTO local_sessions (
-        id, campus_id, device_id, student_user_id, status, started_at, scheduled_end_at, ended_at, last_seq_no
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);`,
+        id, campus_id, device_id, student_user_id, status, started_at, scheduled_end_at, ended_at, last_seq_no, needs_stop_sync
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?);`,
       [
         session.id,
         session.campus_id,
@@ -30,6 +30,7 @@ async function createSession(db, session) {
         startedAt,
         scheduledEndAt,
         session.ended_at || null,
+        session.needs_stop_sync !== undefined ? (session.needs_stop_sync ? 1 : 0) : 0,
       ]
     );
 
@@ -67,22 +68,52 @@ async function getSessionsByStudent(db, studentUserId) {
   return res.rows || [];
 }
 
-async function updateSessionStatus(db, sessionId, status, endedAt = null) {
+async function updateSessionStatus(db, sessionId, status, endedAt = null, needsStopSync = null) {
   if (!['ACTIVE', 'ENDED', 'EXPIRED'].includes(status)) {
     throw new Error(`Invalid session status: ${status}. Must be ACTIVE, ENDED, or EXPIRED`);
   }
 
   return await db.transaction(async (tx) => {
-    const res = await tx.execute(
-      'UPDATE local_sessions SET status = ?, ended_at = ? WHERE id = ?;',
-      [status, endedAt, sessionId]
-    );
+    let sql = 'UPDATE local_sessions SET status = ?, ended_at = ?';
+    const params = [status, endedAt];
+
+    if (needsStopSync !== null) {
+      sql += ', needs_stop_sync = ?';
+      params.push(needsStopSync ? 1 : 0);
+    }
+
+    sql += ' WHERE id = ?;';
+    params.push(sessionId);
+
+    const res = await tx.execute(sql, params);
     if (res.rowsAffected === 0) {
       throw new Error(`Session not found: ${sessionId}`);
     }
     const fetchRes = await tx.execute('SELECT * FROM local_sessions WHERE id = ?;', [sessionId]);
     return fetchRes.rows[0];
   });
+}
+
+/**
+ * Returns ended or expired sessions that still need server-side stop synchronization.
+ */
+async function getSessionsNeedingStopSync(db, studentUserId) {
+  if (!studentUserId) return [];
+  const res = await db.execute(
+    "SELECT * FROM local_sessions WHERE status IN ('ENDED', 'EXPIRED') AND needs_stop_sync = 1 AND student_user_id = ? ORDER BY started_at ASC;",
+    [studentUserId]
+  );
+  return res.rows || [];
+}
+
+/**
+ * Marks a session's stop reconciliation as confirmed with the backend.
+ */
+async function markSessionStopSynced(db, sessionId) {
+  return await db.execute(
+    'UPDATE local_sessions SET needs_stop_sync = 0 WHERE id = ?;',
+    [sessionId]
+  );
 }
 
 /**
@@ -113,6 +144,8 @@ module.exports = {
   getActiveSession,
   getSessionsByStudent,
   updateSessionStatus,
+  getSessionsNeedingStopSync,
+  markSessionStopSynced,
   allocateNextSeqNo,
   deleteSession,
 };

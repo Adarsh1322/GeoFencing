@@ -77,8 +77,13 @@ async function initDatabase(options = {}) {
     adapter = new OpSqliteAdapter(rawDb);
   }
 
-  // 1. Enable Foreign Keys
+  // 1. Enable Foreign Keys & Busy Timeout
   await adapter.execute('PRAGMA foreign_keys = ON;');
+  try {
+    await adapter.execute('PRAGMA busy_timeout = 5000;');
+  } catch (e) {
+    // Ignore if unsupported
+  }
 
   // 2. Configure WAL Journal mode (where supported)
   try {

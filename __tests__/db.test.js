@@ -37,11 +37,13 @@ describe('Database Initialization & Migrations (TC-02, TC-03)', () => {
 
     // 3. Verify schema_migrations record
     const migrations = (await db.execute('SELECT * FROM schema_migrations ORDER BY version ASC;')).rows;
-    expect(migrations.length).toBe(2);
+    expect(migrations.length).toBe(3);
     expect(migrations[0].version).toBe(1);
     expect(migrations[0].name).toBe('initial_offline_schema');
     expect(migrations[1].version).toBe(2);
     expect(migrations[1].name).toBe('identity_isolation_and_quarantine');
+    expect(migrations[2].version).toBe(3);
+    expect(migrations[2].name).toBe('session_stop_reconciliation');
   });
 
   test('TC-03: foreign keys prevent cascade deletion of unacknowledged location records', async () => {
@@ -79,7 +81,7 @@ describe('Database Initialization & Migrations (TC-02, TC-03)', () => {
     await expect(runMigrations(db)).resolves.not.toThrow();
 
     const migrations = (await db.execute('SELECT * FROM schema_migrations;')).rows;
-    expect(migrations.length).toBe(2);
+    expect(migrations.length).toBe(3);
   });
 
   test('OpSqliteAdapter: transaction commits and propagates results', async () => {

@@ -20,6 +20,7 @@ import { saveAttendanceRecord } from '../storage/attendanceStorage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { safetyService } from '../services/safetyService';
+import { trackingService } from '../services/trackingService';
 import StatusCard from '../components/StatusCard';
 import styles from '../styles/attendanceScreen.styles';
 
@@ -62,10 +63,54 @@ export default function AttendanceScreen({ navigation, onNavigateTab, isFocused 
         .getActiveJourney(user.id)
         .then(session => {
           setActiveJourney(session || null);
+          if (session && typeof session.last_seq_no === 'number') {
+            seqNoRef.current = session.last_seq_no;
+          }
         })
         .catch(err => console.warn('Could not restore journey session:', err));
     }
   }, [isFocused, user?.id]);
+
+  // Listen for native Android background tracking events
+  useEffect(() => {
+    const unsubLocation = trackingService.onLocationCaptured(point => {
+      if (activeJourneyRef.current && point.sessionId === activeJourneyRef.current.id) {
+        setTrackedPointsCount(prev => prev + 1);
+        if (accessToken) {
+          safetyService
+            .syncPendingPoints({
+              sessionId: point.sessionId,
+              studentUserId: user?.id,
+              accessToken,
+            })
+            .catch(() => {});
+        }
+      }
+    });
+
+    const unsubStop = trackingService.onJourneyStopped(async event => {
+      if (
+        activeJourneyRef.current &&
+        (!event.sessionId || event.sessionId === activeJourneyRef.current.id)
+      ) {
+        setActiveJourney(null);
+        if (accessToken && user?.id) {
+          safetyService
+            .reconcilePendingSessionStops({
+              studentUserId: user.id,
+              accessToken,
+            })
+            .catch(() => {});
+        }
+        Alert.alert('Journey Ended', 'Your safe campus journey has ended.');
+      }
+    });
+
+    return () => {
+      unsubLocation();
+      unsubStop();
+    };
+  }, [accessToken, user?.id]);
 
   // Derive distance from office
   const effectiveLocation = simulatedLocationMode || currentLocation;
@@ -97,23 +142,25 @@ export default function AttendanceScreen({ navigation, onNavigateTab, isFocused 
         setIsLocating(false);
         setLocationError(null);
 
-        // If journey is active and location sharing is ON, record breadcrumb
+        // If journey is active and location sharing is ON, record breadcrumb (fallback for non-Android / dev environments)
         if (activeJourneyRef.current && isLocationSharingRef.current && user?.id) {
-          seqNoRef.current += 1;
-          safetyService
-            .logBreadcrumb({
-              sessionId: activeJourneyRef.current.id,
-              studentUserId: user.id,
-              coords,
-              seqNo: seqNoRef.current,
-              accessToken,
-            })
-            .then(() => {
-              setTrackedPointsCount(prev => prev + 1);
-            })
-            .catch(err => {
-              console.warn('Breadcrumb log error:', err.message);
-            });
+          if (Platform.OS !== 'android') {
+            seqNoRef.current += 1;
+            safetyService
+              .logBreadcrumb({
+                sessionId: activeJourneyRef.current.id,
+                studentUserId: user.id,
+                coords,
+                seqNo: seqNoRef.current,
+                accessToken,
+              })
+              .then(() => {
+                setTrackedPointsCount(prev => prev + 1);
+              })
+              .catch(err => {
+                console.warn('Breadcrumb log error:', err.message);
+              });
+          }
         }
       },
       error => {
@@ -227,10 +274,14 @@ export default function AttendanceScreen({ navigation, onNavigateTab, isFocused 
     };
   }, [handleRequestLocationPermission]);
 
-  // Re-check permission automatically when user returns to app from device Settings
+  // Re-check permission and trigger syncs when user returns to app
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async nextAppState => {
       if (nextAppState === 'active') {
+        if (user?.id && accessToken) {
+          safetyService.reconcilePendingSessionStops({ studentUserId: user.id, accessToken }).catch(() => {});
+          safetyService.syncPendingPoints({ studentUserId: user.id, accessToken }).catch(() => {});
+        }
         if (Platform.OS === 'android') {
           const hasPermission = await PermissionsAndroid.check(
             PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
@@ -245,7 +296,7 @@ export default function AttendanceScreen({ navigation, onNavigateTab, isFocused 
     return () => {
       subscription.remove();
     };
-  }, [startWatchingLocation]);
+  }, [accessToken, startWatchingLocation, user?.id]);
 
   const handleCheckIn = async () => {
     if (!effectiveLocation) {
@@ -378,7 +429,7 @@ export default function AttendanceScreen({ navigation, onNavigateTab, isFocused 
         );
       }
     } catch (err) {
-      Alert.alert('Journey Error', err.message || 'Failed to update journey.');
+      Alert.alert('Cannot Start Journey', err.message || 'Failed to update journey.');
     } finally {
       setJourneyLoading(false);
     }

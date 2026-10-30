@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
       android:name=".MainApplication"
@@ -13,6 +16,15 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="${usesCleartextTraffic}"
       android:supportsRtl="true">
+
+      <service
+        android:name=".tracking.CampusSafeLocationService"
+        android:foregroundServiceType="location"
+        android:exported="false" />
+
+      <receiver
+        android:name=".tracking.CampusSafeStopReceiver"
+        android:exported="false" />
 
       <meta-data
         android:name="com.google.android.geo.API_KEY"

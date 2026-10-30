@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authApi } from '../services/authApi';
+import { safetyService } from '../services/safetyService';
+import { trackingService } from '../services/trackingService';
 
 const AuthContext = createContext(null);
 
@@ -190,9 +192,28 @@ export function AuthProvider({ children }) {
 
   /**
    * Logs out the student.
+   * P0-1: Cleanly terminates native tracking service and reconciles active journey before clearing identity.
    */
   const logout = async () => {
     try {
+      if (user?.id) {
+        try {
+          const activeSession = await safetyService.getActiveJourney(user.id);
+          if (activeSession) {
+            await safetyService.stopJourney({
+              sessionId: activeSession.id,
+              studentUserId: user.id,
+              accessToken,
+            });
+          }
+        } catch (stopErr) {
+          console.warn('Warning stopping journey during logout:', stopErr.message);
+        }
+      }
+
+      // Ensure native tracking service is unconditionally terminated
+      await trackingService.stopTracking().catch(() => {});
+
       if (refreshToken) {
         await authApi.logout(refreshToken).catch(() => {});
       }
